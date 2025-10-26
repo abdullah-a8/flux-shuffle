@@ -48,7 +48,10 @@
         "android.permission.INTERNET",
         "android.permission.WAKE_LOCK",
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -66,7 +69,9 @@
       "expo-router",
       "expo-font",
       "expo-web-browser",
-      "expo-audio"
+      "expo-audio",
+      "expo-notifications",
+      "./plugins/withAndroidNotifications.js"
     ],
     "experiments": {
       "typedRoutes": true

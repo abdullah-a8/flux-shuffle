@@ -2,6 +2,13 @@ import { useQuery, useMutation, useQueryClient, CancelledError } from '@tanstack
 import { SpotifyService } from '@/utils/spotify';
 import type { SpotifyUser, SpotifyPlaylist, SpotifyTrack } from '@/types/spotify';
 import { getSmartShuffledTracks, type ShuffleStats } from '@/utils/smartShuffle';
+import {
+  showQueueStartNotification,
+  updateQueueProgressNotification,
+  showQueueCompleteNotification,
+  showQueueErrorNotification,
+  dismissNotification,
+} from '@/utils/notificationService';
 
 const spotifyService = SpotifyService;
 
@@ -159,27 +166,22 @@ async function batchQueueTracks({
   }
 }
 
-export function useQueueShuffleMutation(
-  onProgressUpdate?: (progress: QueueShuffleProgress) => void
-) {
-  const queryClient = useQueryClient(); // Get the query client instance
+export function useQueueShuffleMutation() {
+  const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (variables: QueueShuffleParams): Promise<boolean> => {
       const { playlist } = variables;
       let { tracks } = variables;
 
-      // ✅ If tracks aren't provided, fetch them right here!
+      // Fetch tracks if not provided
       if (!tracks || tracks.length === 0 || tracks.some(track => track.uri === null)) {
-        // Check if this is the special "Liked Songs" playlist
         if (playlist.id === 'liked-songs') {
-          // Fetch saved tracks instead of playlist tracks
           tracks = await queryClient.fetchQuery({
             queryKey: spotifyQueryKeys.savedTracks,
             queryFn: () => spotifyService.getUserSavedTracks(),
           });
         } else {
-          // Use fetchQuery to get the data from the cache or network
           tracks = await queryClient.fetchQuery({
             queryKey: spotifyQueryKeys.playlistTracks(playlist.id),
             queryFn: () => spotifyService.getPlaylistTracks(playlist.id),
@@ -189,7 +191,7 @@ export function useQueueShuffleMutation(
       
       if (!tracks || tracks.length === 0) return false;
 
-      // 🎯 Use smart shuffle with memory to ensure all songs play before repeating
+      // Use smart shuffle with memory
       console.log(`[QueueShuffle] Using smart shuffle for playlist: ${playlist.id}`);
       
       const { tracks: smartShuffledTracks, stats } = await getSmartShuffledTracks(
@@ -207,90 +209,56 @@ export function useQueueShuffleMutation(
       const totalToQueue = rest.length;
 
       console.log(`[QueueShuffle] Smart Shuffle Stats:`, stats);
-      console.log(`[QueueShuffle] Queueing ${totalToQueue + 1} tracks (${stats.played + smartShuffledTracks.length}/${tracks.length} will be played after this)`);
+      console.log(`[QueueShuffle] Queueing ${totalToQueue + 1} tracks`);
       
       if (stats.cycleComplete) {
         console.log('✨ [QueueShuffle] Cycle complete! Starting fresh with all songs.');
       }
 
-      // 1. Get Device and Play First Track
+      // Show initial notification
+      await showQueueStartNotification(playlist.name, smartShuffledTracks.length);
+
+      // Get Device and Play First Track
       const playlistUri = playlist.id === 'liked-songs' ? 'spotify:collection:tracks' : playlist.uri;
       const ensuredDeviceId = await spotifyService.ensureActiveDevice(first.uri, playlistUri);
       if (!ensuredDeviceId) {
-        //await spotifyService.openSpotifyApp(playlist.id);
+        await showQueueErrorNotification('No active Spotify device found. Please open Spotify.');
         return false;
       }
       await spotifyService.transferPlayback(ensuredDeviceId, true);
       await spotifyService.playUris([first.uri], ensuredDeviceId);
 
-      // 2. Start Batch Queueing with Smart Shuffle Info
-      // Note: We're queueing smartShuffledTracks.length total (not stats.remaining which is AFTER this operation)
-      const initialMessage = stats.cycleComplete
-        ? '✨ Cycle complete! Starting fresh with unheard songs...'
-        : `Queueing ${smartShuffledTracks.length} unheard songs (${stats.percentage}% of playlist explored)...`;
-        
-      onProgressUpdate?.({
-        isQueueing: true,
-        progress: 0,
-        total: totalToQueue,
-        message: initialMessage,
-      });
-
-      // Queue the tracks (excluding first which is already playing)
+      // Queue the tracks with progress updates
       await batchQueueTracks({
         tracks: rest,
         deviceId: ensuredDeviceId,
         onProgress: ({ progress, total }) => {
-          // Note: stats.played already includes the current batch we're queueing
-          // So we just show the queueing progress, not double-counting
-          const progressMessage = `Queued ${progress}/${total} tracks...`;
-            
-          onProgressUpdate?.({
-            isQueueing: true,
-            progress,
-            total,
-            message: progressMessage,
-          });
+          // Update notification every 10 tracks or on completion
+          if (progress % 10 === 0 || progress === total) {
+            updateQueueProgressNotification(progress, total, playlist.name);
+          }
         },
       });
 
-      // 3. Finalize with Smart Shuffle Stats
-      // Note: totalToQueue is rest.length, but we also played first track, so +1
+      // Show completion notification
       const totalProcessed = totalToQueue + 1;
-      const finalMessage = stats.remaining > 0
-        ? `✅ Queued ${totalProcessed} songs! ${stats.remaining} unheard songs remaining.`
-        : `✅ All songs queued! Next shuffle will start a fresh cycle.`;
-        
-      onProgressUpdate?.({ 
-        isQueueing: false, 
-        progress: totalToQueue, 
-        total: totalToQueue, 
-        message: finalMessage 
-      });
-      
-      // Show final message briefly before clearing
-      if (finalMessage) {
-        setTimeout(() => {
-          onProgressUpdate?.({ isQueueing: false, progress: totalToQueue, total: totalToQueue, message: null });
-        }, 2000);
-      }
-      
-      //await spotifyService.openSpotifyApp(playlist.id);
+      await showQueueCompleteNotification(
+        totalProcessed, 
+        playlist.name,
+        stats.remaining
+      );
 
       return true;
     },
     onError: (error) => {
-      // CANCELLATION HANDLING: Check if the error is a CancelledError
       if (error instanceof CancelledError) {
         console.log('Shuffle was cancelled by React Query.');
-        // We don't need to show a generic error message for a user-initiated cancellation
-        onProgressUpdate?.({ isQueueing: false, progress: 0, total: 0, message: null });
+        dismissNotification();
         return;
       }
       
-      // Handle actual errors
       console.error('Queue shuffle failed:', error);
-      onProgressUpdate?.({ isQueueing: false, progress: 0, total: 0, message: 'An error occurred.' });
+      showQueueErrorNotification(error instanceof Error ? error.message : 'An error occurred');
     },
   });
 }

@@ -1,13 +1,13 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Image, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { useSpotify } from '@/contexts/SpotifyContext';
 import { useQueueShuffleMutation } from '@/hooks/useSpotifyQueries';
 import { useRouter } from 'expo-router';
 import { Music, Play, AlertCircle } from 'lucide-react-native';
-import QueueProgressOverlay from '@/components/QueueProgressOverlay';
 import AlertModal from '@/components/AlertModal';
 import { hasActiveDevice, hasQueuedSongs } from '@/utils/spotify';
+import { initializeNotifications } from '@/utils/notificationService';
 import type { SpotifyPlaylist } from '@/types/spotify';
 
 // Animated Playlist Card Component
@@ -107,15 +107,6 @@ export default function HomeTab() {
     needsReauth,
     login
   } = useSpotify();
-  
-  // ✅ The component now manages its own queueing UI state
-  const [queueStatus, setQueueStatus] = useState({
-    isQueueing: false,
-    progress: 0,
-    total: 0,
-    message: null as string | null,
-    playlistImage: null as string | null,
-  });
 
   // Alert modal state
   const [alertModal, setAlertModal] = useState({
@@ -125,10 +116,17 @@ export default function HomeTab() {
     queueCount: 0,
   });
 
-  // ✅ Instantiate the mutation hook right where you use it
-  const { mutate: shufflePlaylist, isPending } = useQueueShuffleMutation(
-    (progress) => setQueueStatus(prev => ({ ...prev, ...progress }))
-  );
+  // Queue mutation (now uses notifications)
+  const { mutate: shufflePlaylist, isPending } = useQueueShuffleMutation();
+
+  // Initialize notifications on mount
+  useEffect(() => {
+    initializeNotifications().then(hasPermission => {
+      if (!hasPermission) {
+        console.log('[HomeTab] Notification permissions not granted');
+      }
+    });
+  }, []);
 
   const handleLogin = async () => {
     await login();
@@ -170,14 +168,7 @@ export default function HomeTab() {
   };
 
   const proceedWithShuffle = (playlist: SpotifyPlaylist) => {
-    // Set the initial state for the overlay before calling the mutation
-    setQueueStatus({
-      isQueueing: true,
-      progress: 0,
-      total: 0, // Will be updated by the mutation's progress callback
-      message: 'Connecting to Spotify...',
-      playlistImage: playlist.images?.[0]?.url || null
-    });
+    // Simply trigger the mutation - notifications will handle UI feedback
     shufflePlaylist({ playlist });
   };
 
@@ -281,15 +272,6 @@ export default function HomeTab() {
           </View>
         )}
       </ScrollView>
-
-      {/* 🎨 New immersive progress overlay with blur and animations */}
-      <QueueProgressOverlay
-        isVisible={queueStatus.isQueueing || isPending}
-        progress={queueStatus.progress}
-        total={queueStatus.total}
-        message={queueStatus.message}
-        playlistImage={queueStatus.playlistImage}
-      />
 
       {/* 🚨 Alert modal for device and queue checks */}
       <AlertModal
