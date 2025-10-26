@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient, CancelledError } from '@tanstack/react-query';
-import { SpotifyService, trueRandomShuffle } from '@/utils/spotify';
+import { SpotifyService } from '@/utils/spotify';
 import type { SpotifyUser, SpotifyPlaylist, SpotifyTrack } from '@/types/spotify';
+import { getSmartShuffledTracks, type ShuffleStats } from '@/utils/smartShuffle';
 
 const spotifyService = SpotifyService;
 
@@ -95,10 +96,7 @@ interface QueueShuffleParams {
   tracks?: SpotifyTrack[];
 }
 
-// Smart queue size limit for better performance and user experience
-const MAX_QUEUE_SIZE = 150;
-
-interface QueueShuffleProgress {
+export interface QueueShuffleProgress {
   isQueueing: boolean;
   progress: number;
   total: number;
@@ -191,18 +189,28 @@ export function useQueueShuffleMutation(
       
       if (!tracks || tracks.length === 0) return false;
 
-      const freshShuffled = trueRandomShuffle(tracks);
-      const first = freshShuffled[0];
+      // 🎯 Use smart shuffle with memory to ensure all songs play before repeating
+      console.log(`[QueueShuffle] Using smart shuffle for playlist: ${playlist.id}`);
       
-      // 🎵 Smart queue limit: Queue up to MAX_QUEUE_SIZE songs for better performance
-      const rest = freshShuffled.slice(1);
-      const tracksToQueue = rest.slice(0, MAX_QUEUE_SIZE - 1); // -1 because we're playing the first track
-      const totalToQueue = tracksToQueue.length;
+      const { tracks: smartShuffledTracks, stats } = await getSmartShuffledTracks(
+        playlist.id,
+        tracks
+      );
 
-      console.log(`[QueueShuffle] Playlist has ${tracks.length} tracks, queueing ${totalToQueue + 1} tracks (first track + ${totalToQueue} queued)`);
+      if (!smartShuffledTracks || smartShuffledTracks.length === 0) {
+        console.error('[QueueShuffle] Smart shuffle returned no tracks');
+        return false;
+      }
+
+      const first = smartShuffledTracks[0];
+      const rest = smartShuffledTracks.slice(1);
+      const totalToQueue = rest.length;
+
+      console.log(`[QueueShuffle] Smart Shuffle Stats:`, stats);
+      console.log(`[QueueShuffle] Queueing ${totalToQueue + 1} tracks (${stats.played + smartShuffledTracks.length}/${tracks.length} will be played after this)`);
       
-      if (tracks.length > MAX_QUEUE_SIZE) {
-        console.log(`[QueueShuffle] Large playlist detected (${tracks.length} tracks). Queueing first ${MAX_QUEUE_SIZE} songs for better performance.`);
+      if (stats.cycleComplete) {
+        console.log('✨ [QueueShuffle] Cycle complete! Starting fresh with all songs.');
       }
 
       // 1. Get Device and Play First Track
@@ -215,10 +223,11 @@ export function useQueueShuffleMutation(
       await spotifyService.transferPlayback(ensuredDeviceId, true);
       await spotifyService.playUris([first.uri], ensuredDeviceId);
 
-      // 2. Start Batch Queueing
-      const initialMessage = tracks.length > MAX_QUEUE_SIZE 
-        ? `Queueing ${MAX_QUEUE_SIZE} randomly selected songs...`
-        : 'Preparing your truly random queue...';
+      // 2. Start Batch Queueing with Smart Shuffle Info
+      // Note: We're queueing smartShuffledTracks.length total (not stats.remaining which is AFTER this operation)
+      const initialMessage = stats.cycleComplete
+        ? '✨ Cycle complete! Starting fresh with unheard songs...'
+        : `Queueing ${smartShuffledTracks.length} unheard songs (${stats.percentage}% of playlist explored)...`;
         
       onProgressUpdate?.({
         isQueueing: true,
@@ -227,14 +236,14 @@ export function useQueueShuffleMutation(
         message: initialMessage,
       });
 
-      // We pass down the onProgress callback, but no longer the signal
+      // Queue the tracks (excluding first which is already playing)
       await batchQueueTracks({
-        tracks: tracksToQueue,
+        tracks: rest,
         deviceId: ensuredDeviceId,
         onProgress: ({ progress, total }) => {
-          const progressMessage = tracks.length > MAX_QUEUE_SIZE
-            ? `Queued ${progress} of ${total} songs (${progress + 1}/${MAX_QUEUE_SIZE} total)...`
-            : `Queued ${progress} of ${total} tracks...`;
+          // Note: stats.played already includes the current batch we're queueing
+          // So we just show the queueing progress, not double-counting
+          const progressMessage = `Queued ${progress}/${total} tracks...`;
             
           onProgressUpdate?.({
             isQueueing: true,
@@ -245,10 +254,12 @@ export function useQueueShuffleMutation(
         },
       });
 
-      // 3. Finalize
-      const finalMessage = tracks.length > MAX_QUEUE_SIZE 
-        ? `✅ Queued ${MAX_QUEUE_SIZE} random songs! More will be added as you listen.`
-        : null;
+      // 3. Finalize with Smart Shuffle Stats
+      // Note: totalToQueue is rest.length, but we also played first track, so +1
+      const totalProcessed = totalToQueue + 1;
+      const finalMessage = stats.remaining > 0
+        ? `✅ Queued ${totalProcessed} songs! ${stats.remaining} unheard songs remaining.`
+        : `✅ All songs queued! Next shuffle will start a fresh cycle.`;
         
       onProgressUpdate?.({ 
         isQueueing: false, 

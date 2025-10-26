@@ -24,6 +24,10 @@ const REDIRECT_URI = Platform.OS !== 'web'
       });
 
 console.log('[Auth] Spotify REDIRECT_URI ->', REDIRECT_URI);
+// Temporary: Alert to see redirect URI in production build
+if (Platform.OS !== 'web') {
+  console.warn('REDIRECT_URI for Spotify:', REDIRECT_URI);
+}
 
 const SPOTIFY_ENDPOINTS = {
   AUTHORIZE: 'https://accounts.spotify.com/authorize',
