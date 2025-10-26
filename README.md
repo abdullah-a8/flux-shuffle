@@ -1,4 +1,4 @@
-# True Shuffle
+# Flux Shuffle
 
 Experience true randomness in your music. Break free from algorithmic bubbles with mathematically pure shuffle using the Fisher-Yates algorithm.
 
@@ -13,8 +13,8 @@ Experience true randomness in your music. Break free from algorithmic bubbles wi
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/vuciv/true-random-shuffle.git
-   cd true-random-shuffle
+   git clone https://github.com/abdullah-a8/flux-shuffle.git
+   cd flux-shuffle
    ```
 
 2. **Install dependencies**
