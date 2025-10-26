@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "True Shuffle",
+    "name": "Flux Shuffle",
     "slug": "trueshuffle",
     "description": "Experience true randomness in your music. Break free from algorithmic bubbles with mathematically pure shuffle using the Fisher-Yates algorithm.",
     "version": "1.0.1",
@@ -55,8 +55,8 @@
       "bundler": "metro",
       "output": "static",
       "favicon": "./assets/images/favicon.png",
-      "name": "True Shuffle",
-      "shortName": "True Shuffle",
+      "name": "Flux Shuffle",
+      "shortName": "Flux Shuffle",
       "lang": "en",
       "scope": "/",
       "themeColor": "#1DB954",

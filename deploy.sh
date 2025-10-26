@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# True Shuffle - Rebuild and Deploy Script
+# Flux Shuffle - Rebuild and Deploy Script
 # This script cleans, rebuilds, and deploys the app to Netlify
 
 set -e  # Exit on any error
 
-echo "🚀 Starting True Shuffle rebuild and deploy process..."
+echo "🚀 Starting Flux Shuffle rebuild and deploy process..."
 echo ""
 
 # Clean existing build artifacts

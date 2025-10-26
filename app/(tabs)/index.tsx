@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Image, ActivityIndicator } from 'react-native';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { useSpotify } from '@/contexts/SpotifyContext';
 import { useQueueShuffleMutation } from '@/hooks/useSpotifyQueries';
 import { useRouter } from 'expo-router';
@@ -8,6 +9,92 @@ import QueueProgressOverlay from '@/components/QueueProgressOverlay';
 import AlertModal from '@/components/AlertModal';
 import { hasActiveDevice, hasQueuedSongs } from '@/utils/spotify';
 import type { SpotifyPlaylist } from '@/types/spotify';
+
+// Animated Playlist Card Component
+function AnimatedPlaylistCard({ 
+  playlist, 
+  isLoading, 
+  isDisabled, 
+  onPress 
+}: { 
+  playlist: SpotifyPlaylist; 
+  isLoading: boolean; 
+  isDisabled: boolean; 
+  onPress: () => void;
+}) {
+  const scale = useSharedValue(1);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: scale.value }],
+    };
+  });
+
+  const handlePressIn = () => {
+    scale.value = withSpring(0.95, {
+      damping: 15,
+      stiffness: 150,
+    });
+  };
+
+  const handlePressOut = () => {
+    scale.value = withSpring(1, {
+      damping: 15,
+      stiffness: 150,
+    });
+  };
+
+  const isLikedSongs = playlist.id === 'liked-songs';
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      disabled={isDisabled}
+    >
+      <Animated.View style={[styles.playlistCard, isLoading && styles.playlistCardLoading, animatedStyle]}>
+        <View style={styles.playlistImageContainer}>
+          <Image
+            source={{ 
+              uri: playlist.images?.[0]?.url || 'https://images.pexels.com/photos/1389429/pexels-photo-1389429.jpeg?auto=compress&cs=tinysrgb&w=300&h=300&fit=crop'
+            }}
+            style={[
+              styles.playlistImage,
+              isLoading && styles.playlistImageLoading
+            ]}
+          />
+          {isLoading && (
+            <View style={styles.playlistLoadingOverlay}>
+              <ActivityIndicator size="small" color="#1DB954" />
+            </View>
+          )}
+        </View>
+        <View style={styles.playlistInfo}>
+          <Text style={styles.playlistName} numberOfLines={2}>
+            {playlist.name}
+          </Text>
+          <Text style={styles.playlistMeta}>
+            {isLoading 
+              ? 'Loading your liked songs...' 
+              : `${playlist.tracks.total} tracks • ${playlist.owner.display_name}`
+            }
+          </Text>
+        </View>
+        <View style={[
+          styles.playButton,
+          isLoading && styles.playButtonDisabled
+        ]}>
+          {isLoading ? (
+            <ActivityIndicator size="small" color="#666" />
+          ) : (
+            <Play size={20} color="#000" fill="#1DB954" />
+          )}
+        </View>
+      </Animated.View>
+    </Pressable>
+  );
+}
 
 export default function HomeTab() {
   const { 
@@ -130,7 +217,7 @@ export default function HomeTab() {
     return (
       <View style={styles.centerContainer}>
         <Music size={80} color="#1DB954" />
-        <Text style={styles.title}>True Random Shuffle</Text>
+        <Text style={styles.title}>Flux Shuffle</Text>
         <Text style={styles.subtitle}>
           Connecting to Spotify...
         </Text>
@@ -182,53 +269,13 @@ export default function HomeTab() {
               const isLikedSongsLoading = isLikedSongs && savedTracksLoading;
               
               return (
-                <TouchableOpacity
+                <AnimatedPlaylistCard
                   key={playlist.id}
-                  style={[
-                    styles.playlistCard,
-                    isLikedSongsLoading && styles.playlistCardLoading
-                  ]}
+                  playlist={playlist}
+                  isLoading={isLikedSongsLoading}
+                  isDisabled={isPending || isLikedSongsLoading}
                   onPress={() => handlePlaylistSelect(playlist)}
-                  disabled={isPending || isLikedSongsLoading}
-                >
-                  <View style={styles.playlistImageContainer}>
-                    <Image
-                      source={{ 
-                        uri: playlist.images?.[0]?.url || 'https://images.pexels.com/photos/1389429/pexels-photo-1389429.jpeg?auto=compress&cs=tinysrgb&w=300&h=300&fit=crop'
-                      }}
-                      style={[
-                        styles.playlistImage,
-                        isLikedSongsLoading && styles.playlistImageLoading
-                      ]}
-                    />
-                    {isLikedSongsLoading && (
-                      <View style={styles.playlistLoadingOverlay}>
-                        <ActivityIndicator size="small" color="#1DB954" />
-                      </View>
-                    )}
-                  </View>
-                  <View style={styles.playlistInfo}>
-                    <Text style={styles.playlistName} numberOfLines={2}>
-                      {playlist.name}
-                    </Text>
-                    <Text style={styles.playlistMeta}>
-                      {isLikedSongsLoading 
-                        ? 'Loading your liked songs...' 
-                        : `${playlist.tracks.total} tracks • ${playlist.owner.display_name}`
-                      }
-                    </Text>
-                  </View>
-                  <View style={[
-                    styles.playButton,
-                    isLikedSongsLoading && styles.playButtonDisabled
-                  ]}>
-                    {isLikedSongsLoading ? (
-                      <ActivityIndicator size="small" color="#666" />
-                    ) : (
-                      <Play size={20} color="#000" fill="#1DB954" />
-                    )}
-                  </View>
-                </TouchableOpacity>
+                />
               );
             })}
           </View>
