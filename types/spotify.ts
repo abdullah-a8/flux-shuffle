@@ -7,6 +7,7 @@ export interface SpotifyUser {
     height: number;
     width: number;
   }>;
+  product?: string; // Spotify subscription type: 'premium', 'free', 'open'
 }
 
 export interface SpotifyPlaylist {

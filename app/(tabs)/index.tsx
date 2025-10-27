@@ -6,7 +6,7 @@ import { useQueueShuffleMutation } from '@/hooks/useSpotifyQueries';
 import { useRouter } from 'expo-router';
 import { Music, Play, AlertCircle } from 'lucide-react-native';
 import AlertModal from '@/components/AlertModal';
-import { hasActiveDevice, hasQueuedSongs } from '@/utils/spotify';
+import { hasActiveDevice, hasQueuedSongs, openSpotifyApp } from '@/utils/spotify';
 import { initializeNotifications } from '@/utils/notificationService';
 import type { SpotifyPlaylist } from '@/types/spotify';
 
@@ -173,12 +173,56 @@ export default function HomeTab() {
   };
 
   const handleAlertPrimaryAction = async () => {
-    const { pendingPlaylist } = alertModal;
-    setAlertModal({ isVisible: false, type: 'generic', pendingPlaylist: null, queueCount: 0 });
+    const { pendingPlaylist, type } = alertModal;
     
-    if (pendingPlaylist) {
-      // Re-run the checks and proceed if they pass
-      await handlePlaylistSelect(pendingPlaylist);
+    // If it's a no-device alert, open Spotify
+    if (type === 'no-device') {
+      setAlertModal({ isVisible: false, type: 'generic', pendingPlaylist: null, queueCount: 0 });
+
+      // Open Spotify app to the specific playlist
+      const playlistId = pendingPlaylist?.id === 'liked-songs' ? 'liked-songs' : pendingPlaylist?.id;
+      await openSpotifyApp(playlistId);
+      
+      // Wait longer for Spotify to start up and register device, then retry with multiple attempts
+      const retryWithBackoff = async (attempt: number = 1, maxAttempts: number = 3) => {
+        if (attempt > maxAttempts || !pendingPlaylist) {
+          return;
+        }
+        
+        const delay = 2000 * attempt; // 2s, 4s, 6s
+        await new Promise(resolve => setTimeout(resolve, delay));
+
+        // Check if device is available now
+        const hasDevice = await hasActiveDevice();
+        
+        if (hasDevice) {
+          // Device found! Proceed with shuffle
+          await handlePlaylistSelect(pendingPlaylist);
+        } else if (attempt < maxAttempts) {
+          // No device yet, try again
+          console.log(`[HomeTab] No device found on attempt ${attempt}, retrying...`);
+          await retryWithBackoff(attempt + 1, maxAttempts);
+        } else {
+          // Give up after max attempts, show the modal again
+          console.log('[HomeTab] No device found after all attempts');
+          setAlertModal({
+            isVisible: true,
+            type: 'no-device',
+            pendingPlaylist,
+            queueCount: 0,
+          });
+        }
+      };
+      
+      retryWithBackoff(1, 3);
+    } else {
+      // For other alerts, just close and retry
+      setAlertModal({ isVisible: false, type: 'generic', pendingPlaylist: null, queueCount: 0 });
+      
+      if (pendingPlaylist) {
+        // Re-run the checks and proceed if they pass
+        await handlePlaylistSelect(pendingPlaylist);
+      }
     }
   };
 

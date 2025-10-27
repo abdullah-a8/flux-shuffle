@@ -31,11 +31,41 @@ const SpotifyContext = createContext<SpotifyContextType | undefined>(undefined);
 export function SpotifyProvider({ children }: { children: ReactNode }) {
   const [currentPlaylist, setCurrentPlaylist] = useState<SpotifyPlaylist | null>(null);
   const [needsReauth, setNeedsReauth] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
   const spotifyService = SpotifyService;
   const queryClient = useQueryClient();
   
   const { data: user, isLoading: userLoading, refetch: refetchUser } = useSpotifyUser();
   const isAuthenticated = !!user;
+  
+  // Initialize auth on mount - refresh token if needed
+  React.useEffect(() => {
+    let mounted = true;
+    
+    const initAuth = async () => {
+      try {
+        const hasValidAuth = await spotifyService.initializeAuth();
+        if (mounted) {
+          if (hasValidAuth) {
+            // Token is valid or was refreshed, refetch user data
+            await refetchUser();
+          }
+          setIsInitializing(false);
+        }
+      } catch (error) {
+        console.error('[SpotifyProvider] Error initializing auth:', error);
+        if (mounted) {
+          setIsInitializing(false);
+        }
+      }
+    };
+    
+    initAuth();
+    
+    return () => {
+      mounted = false;
+    };
+  }, []);
   
   const { data: playlists = [], isLoading: playlistsLoading } = useSpotifyPlaylists(isAuthenticated);
   
@@ -153,7 +183,7 @@ export function SpotifyProvider({ children }: { children: ReactNode }) {
     <SpotifyContext.Provider value={{
       user: user || null,
       isAuthenticated,
-      isLoading: userLoading,
+      isLoading: isInitializing || userLoading,
       playlists,
       playlistsLoading,
       savedTracks,

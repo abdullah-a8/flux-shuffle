@@ -67,31 +67,37 @@ export default function AlertModal({
     switch (type) {
       case 'no-device':
         return {
-          icon: <Smartphone size={48} color="#FF9500" />,
-          title: title || 'Spotify Connection Lost',
-          message: message || 'Spotify may have lost connection. Try these steps:\n\n1. Force close your Spotify app completely\n2. Reopen Spotify and start playing any song\n3. Come back here to continue\n\nThis helps refresh Spotify\'s connection and makes your device discoverable.',
-          primaryButtonText: primaryButtonText || 'I Restarted Spotify',
+          icon: <Smartphone size={56} color="#1DB954" />,
+          title: title || 'Spotify Not Active',
+          description: message || 'Start playing any song on Spotify to activate your device, then return here.',
+          primaryButtonText: primaryButtonText || 'Open Spotify',
           secondaryButtonText: secondaryButtonText || 'Cancel',
+          showSteps: true,
+          steps: [
+            'Open Spotify app',
+            'Play any song',
+            'Return and shuffle'
+          ],
         };
       case 'queue-not-empty':
-        const queueMessage = queueCount 
-          ? `Your Spotify queue has ${queueCount} song${queueCount === 1 ? '' : 's'} in it. Please clear your queue first for the best shuffle experience.\n\nTip: In Spotify, go to your queue and tap "Clear queue" or swipe left on songs to remove them.`
-          : 'Your Spotify queue has songs in it. Please clear your queue first for the best shuffle experience.\n\nTip: In Spotify, go to your queue and tap "Clear queue" or swipe left on songs to remove them.';
-        
         return {
-          icon: <Music size={48} color="#FF9500" />,
-          title: title || 'Clear Your Queue',
-          message: message || queueMessage,
-          primaryButtonText: primaryButtonText || 'I Cleared My Queue',
+          icon: <Music size={56} color="#1DB954" />,
+          title: title || 'Clear Queue First',
+          description: message || (queueCount 
+            ? `Found ${queueCount} song${queueCount === 1 ? '' : 's'} in your queue. Clear it for the best experience.`
+            : 'Clear your Spotify queue for the best shuffle experience.'),
+          primaryButtonText: primaryButtonText || 'Done, Try Again',
           secondaryButtonText: secondaryButtonText || 'Cancel',
+          showSteps: false,
         };
       default:
         return {
-          icon: <AlertTriangle size={48} color="#FF9500" />,
+          icon: <AlertTriangle size={56} color="#FF9500" />,
           title: title || 'Alert',
-          message: message || 'Something needs your attention.',
+          description: message || 'Something needs your attention.',
           primaryButtonText: primaryButtonText || 'OK',
           secondaryButtonText: secondaryButtonText || 'Cancel',
+          showSteps: false,
         };
     }
   };
@@ -99,105 +105,178 @@ export default function AlertModal({
   const content = getContent();
 
   return (
-    <AnimatedBlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill}>
-      <Animated.View style={[styles.alertCard, animatedCardStyle]}>
-        <View style={styles.iconContainer}>
-          {content.icon}
-        </View>
-        
-        <Text style={styles.alertTitle}>{content.title}</Text>
-        <Text style={styles.alertMessage}>{content.message}</Text>
-        
-        <View style={styles.buttonContainer}>
-          {content.secondaryButtonText && (
-            <TouchableOpacity
-              style={[styles.button, styles.secondaryButton]}
-              onPress={onSecondaryPress || onClose}
-            >
-              <Text style={styles.secondaryButtonText}>{content.secondaryButtonText}</Text>
-            </TouchableOpacity>
+    <View style={StyleSheet.absoluteFill}>
+      <AnimatedBlurView 
+        intensity={80} 
+        tint="dark" 
+        style={styles.backdrop}
+      >
+        <Animated.View style={[styles.alertCard, animatedCardStyle]}>
+          {/* Icon */}
+          <View style={styles.iconContainer}>
+            {content.icon}
+          </View>
+          
+          {/* Title */}
+          <Text style={styles.alertTitle}>{content.title}</Text>
+          
+          {/* Description */}
+          <Text style={styles.alertDescription}>{content.description}</Text>
+          
+          {/* Steps (optional) */}
+          {content.showSteps && content.steps && (
+            <View style={styles.stepsContainer}>
+              {content.steps.map((step, index) => (
+                <View key={index} style={styles.stepRow}>
+                  <View style={styles.stepNumber}>
+                    <Text style={styles.stepNumberText}>{index + 1}</Text>
+                  </View>
+                  <Text style={styles.stepText}>{step}</Text>
+                </View>
+              ))}
+            </View>
           )}
           
-          <TouchableOpacity
-            style={[styles.button, styles.primaryButton]}
-            onPress={onPrimaryPress || onClose}
-          >
-            <Text style={styles.primaryButtonText}>{content.primaryButtonText}</Text>
-          </TouchableOpacity>
-        </View>
-      </Animated.View>
-    </AnimatedBlurView>
+          {/* Buttons */}
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.primaryButton]}
+              onPress={onPrimaryPress || onClose}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.primaryButtonText}>{content.primaryButtonText}</Text>
+            </TouchableOpacity>
+            
+            {content.secondaryButtonText && (
+              <TouchableOpacity
+                style={[styles.button, styles.secondaryButton]}
+                onPress={onSecondaryPress || onClose}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.secondaryButtonText}>{content.secondaryButtonText}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </Animated.View>
+      </AnimatedBlurView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  alertCard: {
-    backgroundColor: 'rgba(28, 28, 30, 0.85)',
-    borderRadius: 24,
-    padding: 24,
-    width: '90%',
-    maxWidth: 380,
-    alignSelf: 'center',
-    marginTop: 'auto',
-    marginBottom: 'auto',
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
     alignItems: 'center',
-    // iOS-style shadows
+    padding: 20,
+  },
+  alertCard: {
+    backgroundColor: '#121212',
+    borderRadius: 28,
+    padding: 32,
+    width: '100%',
+    maxWidth: 400,
+    alignItems: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.5,
+    shadowRadius: 40,
+    elevation: 20,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'rgba(29, 185, 84, 0.15)',
   },
   iconContainer: {
-    marginBottom: 20,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(29, 185, 84, 0.1)',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 24,
   },
   alertTitle: {
     color: '#fff',
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: '700',
     marginBottom: 12,
     textAlign: 'center',
+    letterSpacing: -0.5,
   },
-  alertMessage: {
-    color: '#b3b3b3',
-    fontSize: 16,
-    marginBottom: 32,
+  alertDescription: {
+    color: '#9CA3AF',
+    fontSize: 15,
+    marginBottom: 24,
     textAlign: 'center',
     lineHeight: 22,
+    paddingHorizontal: 8,
+  },
+  stepsContainer: {
+    width: '100%',
+    backgroundColor: 'rgba(29, 185, 84, 0.05)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 28,
+    gap: 12,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  stepNumber: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#1DB954',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepNumberText: {
+    color: '#000',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  stepText: {
+    color: '#E5E7EB',
+    fontSize: 15,
+    fontWeight: '500',
+    flex: 1,
   },
   buttonContainer: {
-    flexDirection: 'row',
     width: '100%',
     gap: 12,
   },
   button: {
-    flex: 1,
+    width: '100%',
     paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderRadius: 12,
+    paddingHorizontal: 24,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
   primaryButton: {
     backgroundColor: '#1DB954',
+    shadowColor: '#1DB954',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 4,
   },
   secondaryButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
   },
   primaryButtonText: {
     color: '#000',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: -0.3,
   },
   secondaryButtonText: {
-    color: '#fff',
+    color: '#9CA3AF',
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',
+    letterSpacing: -0.3,
   },
 });

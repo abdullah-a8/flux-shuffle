@@ -200,7 +200,10 @@ export async function logout(): Promise<void> {
 
 async function refreshAccessToken(): Promise<boolean> {
   const refreshToken = await getRefreshToken();
-  if (!refreshToken) return false;
+  if (!refreshToken) {
+    console.log('[SpotifyService] No refresh token available');
+    return false;
+  }
   try {
     const response = await fetch(SPOTIFY_ENDPOINTS.TOKEN, {
       method: 'POST',
@@ -211,6 +214,20 @@ async function refreshAccessToken(): Promise<boolean> {
         client_id: CLIENT_ID,
       }).toString(),
     });
+    
+    if (!response.ok) {
+      console.error('[SpotifyService] Token refresh failed with status:', response.status);
+      const errorData = await response.json().catch(() => ({}));
+      console.error('[SpotifyService] Refresh error details:', errorData);
+      
+      // If refresh token is invalid/expired, clear all tokens
+      if (response.status === 400 || response.status === 401) {
+        console.log('[SpotifyService] Refresh token invalid or expired, clearing tokens');
+        await logout();
+      }
+      return false;
+    }
+    
     const data = await response.json();
     if (data.access_token) {
       await setAccessToken(data.access_token);
@@ -219,22 +236,20 @@ async function refreshAccessToken(): Promise<boolean> {
         await setRefreshToken(data.refresh_token);
       }
       const expiresInSec: number | undefined = data.expires_in;
+      // Set expiry timestamp (refresh 30s early to be safe)
       await setAccessTokenExpiryTs(expiresInSec ? Date.now() + (expiresInSec - 30) * 1000 : 0);
-      await AsyncStorage.setItem('spotify_access_token', data.access_token);
-      if (expiresInSec) {
-        await AsyncStorage.setItem('spotify_access_expiry_ts', String(expiresInSec));
-      }
+      console.log('[SpotifyService] Token refreshed successfully, expires in:', expiresInSec, 'seconds');
       return true;
     }
     return false;
   } catch (error) {
-    console.error('Failed to refresh access token:', error);
+    console.error('[SpotifyService] Failed to refresh access token:', error);
     return false;
   }
 }
 
 async function makeApiCall<T>(url: string, options?: { method?: string; body?: any; headers?: Record<string, string>; accept204?: boolean }): Promise<T | null> {
-  const accessToken = await AsyncStorage.getItem('spotify_access_token');
+  let accessToken = await AsyncStorage.getItem('spotify_access_token');
   if (!accessToken) {
     throw new Error('No access token available');
   }
@@ -243,7 +258,11 @@ async function makeApiCall<T>(url: string, options?: { method?: string; body?: a
     // Refresh if token is near expiry
     const accessTokenExpiryTs = await getAccessTokenExpiryTs();
     if (accessTokenExpiryTs && Date.now() > accessTokenExpiryTs) {
-      await refreshAccessToken();
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        // Get the new access token after refresh
+        accessToken = await AsyncStorage.getItem('spotify_access_token');
+      }
     }
 
     const response = await fetch(url, {
@@ -283,10 +302,12 @@ async function makeApiCall<T>(url: string, options?: { method?: string; body?: a
     if (response.status === 401) {
       const refreshed = await refreshAccessToken();
       if (refreshed) {
+        // Get the new access token after refresh for retry
+        const newAccessToken = await AsyncStorage.getItem('spotify_access_token');
         const retry = await fetch(url, {
           method: options?.method || 'GET',
           headers: {
-            'Authorization': `Bearer ${accessToken}`,
+            'Authorization': `Bearer ${newAccessToken}`,
             ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
             ...(options?.headers || {}),
           },
@@ -532,6 +553,42 @@ export function isAuthenticated(): boolean {
   return !!getAccessToken();
 }
 
+// Check and refresh token if needed on app startup
+export async function initializeAuth(): Promise<boolean> {
+  try {
+    const accessToken = await getAccessToken();
+    const refreshToken = await getRefreshToken();
+    
+    // No tokens at all - user needs to login
+    if (!accessToken || !refreshToken) {
+      console.log('[SpotifyService] No tokens found, user needs to login');
+      return false;
+    }
+    
+    // Check if token is expired or will expire soon
+    const expiryTs = await getAccessTokenExpiryTs();
+    const now = Date.now();
+    
+    if (expiryTs && now > expiryTs) {
+      console.log('[SpotifyService] Token expired, refreshing...');
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        console.log('[SpotifyService] Token refresh failed, user needs to re-login');
+        return false;
+      }
+      console.log('[SpotifyService] Token refreshed successfully');
+    } else if (expiryTs) {
+      const timeUntilExpiry = Math.floor((expiryTs - now) / 1000 / 60);
+      console.log(`[SpotifyService] Token valid for ${timeUntilExpiry} more minutes`);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('[SpotifyService] Error initializing auth:', error);
+    return false;
+  }
+}
+
 // Check if user has the required scopes by testing saved tracks endpoint
 export async function hasRequiredScopes(): Promise<boolean> {
   try {
@@ -595,13 +652,25 @@ export async function ensureActiveDevice(trackUri?: string, playlistUri?: string
     }
 
     // Give Spotify a moment to register as a Connect device
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
-    devices = await getDevices();
-    if (devices && devices.length > 0) {
-      const active = devices.find(d => d.is_active) || devices[0];
-      return active?.id;
+    // Retry up to 3 times with increasing delays
+    for (let i = 0; i < 3; i++) {
+      devices = await getDevices();
+      if (devices && devices.length > 0) {
+        const active = devices.find(d => d.is_active) || devices[0];
+        console.log(`[SpotifyService] Found device after ${i + 1} attempt(s):`, active?.name);
+        return active?.id;
+      }
+      
+      // Wait before next retry (1s, 2s, 3s)
+      if (i < 2) {
+        console.log(`[SpotifyService] No device found, retrying in ${i + 1}s...`);
+        await new Promise(resolve => setTimeout(resolve, (i + 1) * 1000));
+      }
     }
+    
+    console.log('[SpotifyService] No device found after 3 attempts');
   } catch (error) {
     console.error('[SpotifyService] ensureActiveDevice error ->', error);
   }
@@ -738,6 +807,7 @@ export const SpotifyService = {
   getPlaylistTracks,
   getUserSavedTracks,
   isAuthenticated,
+  initializeAuth,
   hasRequiredScopes,
   getDevices,
   getPlaybackState,
