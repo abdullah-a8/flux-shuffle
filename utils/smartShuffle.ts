@@ -72,17 +72,26 @@ const getStorageKey = (playlistId: string): string => `${STORAGE_PREFIX}${playli
 // ============================================================================
 
 /**
- * Generate a simple fingerprint/hash of the playlist to detect changes
- * Uses: total count + first track ID + last track ID
- * This is lightweight but effective for detecting adds/removes
+ * Generate a fingerprint/hash of the playlist to detect changes
+ * Uses: total count + samples from 4 key positions (start, 1/3, 2/3, end)
+ * This is more robust for detecting adds/removes/reorders in the middle
  */
 function generatePlaylistHash(tracks: SpotifyTrack[]): string {
-  if (tracks.length === 0) return '0__';
-  
-  const firstId = tracks[0]?.id || '';
-  const lastId = tracks[tracks.length - 1]?.id || '';
-  
-  return `${tracks.length}_${firstId}_${lastId}`;
+  if (tracks.length === 0) return '0____';
+
+  // Sample tracks at key positions to better detect changes
+  const positions = [
+    0,
+    Math.floor(tracks.length / 3),
+    Math.floor(tracks.length * 2 / 3),
+    tracks.length - 1
+  ];
+
+  const samples = positions
+    .map(i => tracks[i]?.id || '')
+    .join('_');
+
+  return `${tracks.length}_${samples}`;
 }
 
 /**
@@ -236,64 +245,69 @@ export async function getSmartShuffledTracks(
       console.log('[SmartShuffle] Playlist changed detected (songs added/removed), resetting memory');
       console.log(`  Old: ${memory.playlistHash}`);
       console.log(`  New: ${currentHash}`);
-      
+
       // Reset memory but keep cycle number
       memory = createFreshMemory(playlistId, allTracks, memory.cycleNumber);
     }
 
-    // Step 3: Filter to get unplayed tracks
-    const playedSet = new Set(memory.playedTrackIds);
-    const unplayedTracks = allTracks.filter(track => !playedSet.has(track.id));
-
-    // Step 3.5: Clean up orphaned track IDs (tracks that were removed from playlist)
+    // Step 3: Clean up orphaned track IDs (tracks that were removed from playlist)
+    // This MUST happen before filtering unplayed tracks for accurate stats
     const currentTrackIds = new Set(allTracks.map(t => t.id));
     const orphanedIds = memory.playedTrackIds.filter(id => !currentTrackIds.has(id));
-    
+
     if (orphanedIds.length > 0) {
       console.log(`[SmartShuffle] Removing ${orphanedIds.length} orphaned track IDs from memory`);
       memory.playedTrackIds = memory.playedTrackIds.filter(id => currentTrackIds.has(id));
     }
 
+    // Step 4: Filter to get unplayed tracks (after orphan cleanup for accurate counts)
+    const playedSet = new Set(memory.playedTrackIds);
+    const unplayedTracks = allTracks.filter(track => !playedSet.has(track.id));
+
     console.log(`[SmartShuffle] Unplayed tracks: ${unplayedTracks.length}/${allTracks.length}`);
 
-    // Step 4: Check if cycle is complete (all songs have been played)
+    // Step 5: Check if cycle is complete (all songs have been played)
     if (unplayedTracks.length === 0) {
       console.log('✨ [SmartShuffle] Cycle complete! All songs have been played. Starting fresh cycle...');
-      
+
       // Increment cycle counter and reset
       const newCycleNumber = memory.cycleNumber + 1;
       memory = createFreshMemory(playlistId, allTracks, newCycleNumber);
-      
+
+      // CRITICAL: Save fresh memory to AsyncStorage BEFORE recursing
+      // This prevents race conditions where the recursive call might load stale data
+      await saveShuffleMemory(memory);
+
       // Recurse with fresh state to get tracks for new cycle
       const result = await getSmartShuffledTracks(playlistId, allTracks);
-      
+
       // Mark that cycle was just completed
       result.stats.cycleComplete = true;
-      
+
       return result;
     }
 
-    // Step 5: Calculate how many tracks to return
+    // Step 6: Calculate how many tracks to return
     const setSize = calculateOptimalSetSize(allTracks.length);
     const tracksToReturn = Math.min(setSize, unplayedTracks.length);
 
     console.log(`[SmartShuffle] Set size: ${setSize}, Will return: ${tracksToReturn} tracks`);
 
-    // Step 6: Shuffle unplayed tracks using true random algorithm
+    // Step 7: Shuffle unplayed tracks using true random algorithm
     const shuffled = trueRandomShuffle(unplayedTracks);
     const selectedTracks = shuffled.slice(0, tracksToReturn);
 
     console.log(`[SmartShuffle] Selected ${selectedTracks.length} tracks for queueing`);
 
-    // Step 7: Mark selected tracks as played
+    // Step 8: Mark selected tracks as played
     const selectedIds = selectedTracks.map(t => t.id);
     memory.playedTrackIds.push(...selectedIds);
     memory.lastUpdated = Date.now();
 
-    // Step 8: Save updated memory
+    // Step 9: Save updated memory
     await saveShuffleMemory(memory);
 
-    // Step 9: Calculate statistics
+    // Step 10: Calculate statistics
     const stats: ShuffleStats = {
       played: memory.playedTrackIds.length,
       remaining: allTracks.length - memory.playedTrackIds.length,
@@ -310,8 +324,10 @@ export async function getSmartShuffledTracks(
     };
   } finally {
     // Release the lock for this playlist
-    shuffleLocks.delete(playlistId);
+    // IMPORTANT: Signal completion first, then remove from map
+    // This ensures waiting operations see the resolved promise
     releaseLock!();
+    shuffleLocks.delete(playlistId);
   }
 }
 

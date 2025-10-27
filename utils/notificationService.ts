@@ -16,7 +16,8 @@ const NOTIFICATION_ID = 'queue-notification';
 // Configure how notifications should be handled when app is in foreground
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: false,
     shouldSetBadge: false,
   }),
@@ -46,7 +47,6 @@ export async function requestNotificationPermissions(): Promise<boolean> {
           allowAlert: true,
           allowBadge: true,
           allowSound: false, // Don't play sound for queue progress
-          allowAnnouncements: false,
         },
       });
       finalStatus = status;
