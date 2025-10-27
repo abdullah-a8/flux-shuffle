@@ -1,7 +1,8 @@
 /**
- * Notification Service
+ * Notification Service - Material 3 Design
  *
- * Handles foreground service notifications for Android background queueing.
+ * Handles foreground service notifications for Android background queueing
+ * with modern, sleek Material 3 design principles.
  *
  * CRITICAL ANDROID BEHAVIOR:
  * - Persistent notifications (sticky: true) act as foreground service notifications
@@ -9,10 +10,25 @@
  * - Without this, Android will suspend JS execution and queueing stops
  * - The notification MUST remain visible while queueing is in progress
  *
+ * MATERIAL 3 DESIGN FEATURES:
+ * 1. **Indeterminate Progress** - Swiggly animation during initialization
+ * 2. **Determinate Progress** - Smooth fill animation during queueing
+ * 3. **Visual Hierarchy** - Title/body/subtitle for clear information structure
+ * 4. **Minimal Interruption** - LOW importance, silent, no vibration
+ * 5. **Smart Updates** - Update every 3 tracks OR 2 seconds (near real-time)
+ * 6. **Spotify Brand Integration** - #1DB954 green accent throughout
+ * 7. **Clean Typography** - Professional, readable messaging
+ *
+ * PROGRESS UPDATE STRATEGY:
+ * - Initial: Indeterminate "swiggly" progress bar
+ * - During: Determinate progress bar updated every 3 tracks or 2 seconds
+ * - Completion: Success message with remaining tracks info
+ * - Error: Clear error indication with detailed subtitle
+ *
  * Architecture:
  * - Uses expo-notifications for cross-platform notification API
  * - Integrates with queueBackgroundService.ts for background task execution
- * - Provides progress updates via notification updates (not push)
+ * - Provides near real-time progress updates (optimized for battery/performance)
  */
 
 import * as Notifications from 'expo-notifications';
@@ -77,11 +93,17 @@ export async function requestNotificationPermissions(): Promise<boolean> {
 }
 
 /**
- * Setup Android notification channel
+ * Setup Android notification channel with Material 3 design
  * Required for Android 8.0+
  *
  * This channel is used for foreground service notifications
  * that keep the background queueing process alive
+ *
+ * Design Philosophy:
+ * - Minimal interruption (LOW importance)
+ * - Silent (no sound/vibration)
+ * - Visible on lockscreen for transparency
+ * - Material 3 compliant styling
  */
 export async function setupNotificationChannel(): Promise<void> {
   if (Platform.OS !== 'android') {
@@ -90,27 +112,33 @@ export async function setupNotificationChannel(): Promise<void> {
 
   try {
     await Notifications.setNotificationChannelAsync(QUEUE_CHANNEL_ID, {
-      name: 'Queue Progress',
-      description: 'Shows progress when queueing tracks to Spotify. Required for background operation.',
-      importance: Notifications.AndroidImportance.LOW, // Low to avoid interruption
-      sound: null, // No sound for progress notifications
-      vibrationPattern: [0],
+      name: 'Music Queue',
+      description: 'Shows real-time progress when queueing tracks. Required for background operation.',
+      importance: Notifications.AndroidImportance.LOW, // Low priority - minimal interruption
+      sound: null, // Silent - no audio feedback
+      vibrationPattern: [0], // No vibration
       enableVibrate: false,
-      showBadge: false,
-      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-      enableLights: false, // No LED light for progress
-      bypassDnd: false, // Don't bypass Do Not Disturb
+      showBadge: false, // No app badge counter
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC, // Visible on lockscreen
+      enableLights: false, // No LED indicator
+      bypassDnd: false, // Respect Do Not Disturb
     });
 
-    console.log('[Notifications] Foreground service channel created');
+    console.log('[Notifications] Material 3 foreground service channel created');
   } catch (error) {
     console.error('[Notifications] Error creating channel:', error);
   }
 }
 
 /**
- * Show initial queueing notification
+ * Show initial queueing notification with Material 3 design
  * This acts as the foreground service notification on Android
+ *
+ * Design Features:
+ * - Indeterminate progress bar (swiggly animation)
+ * - Clean typography
+ * - Spotify brand color accent
+ * - Persistent and non-dismissible during operation
  */
 export async function showQueueStartNotification(
   playlistName: string,
@@ -120,32 +148,48 @@ export async function showQueueStartNotification(
     await Notifications.scheduleNotificationAsync({
       identifier: NOTIFICATION_ID,
       content: {
-        title: '🎵 Queueing Tracks',
-        body: `Preparing ${totalTracks} tracks from ${playlistName}...`,
-        color: '#1DB954', // Spotify green
-        priority: Notifications.AndroidNotificationPriority.LOW, // Low priority to not interrupt
-        sticky: true, // Keep notification visible - CRITICAL for foreground service
-        autoDismiss: false, // Don't auto-dismiss - required for foreground service
+        title: 'Queueing to Spotify',
+        body: `${totalTracks} tracks from ${playlistName}`,
+        subtitle: 'Preparing tracks...', // Secondary text for Material 3 hierarchy
+        color: '#1DB954', // Spotify brand green - Material 3 accent
+        priority: Notifications.AndroidNotificationPriority.LOW,
+        sticky: true, // CRITICAL: Keeps foreground service alive
+        autoDismiss: false,
         data: {
           type: 'queue-progress',
-          isForegroundService: true, // Mark as foreground service notification
+          isForegroundService: true,
+          playlistName,
+          totalTracks,
         },
         ...(Platform.OS === 'android' && {
-          channelId: QUEUE_CHANNEL_ID, // Explicitly set channel
+          channelId: QUEUE_CHANNEL_ID,
+          // Indeterminate progress - Material 3 "swiggly" animation
+          progress: {
+            max: 0,
+            current: 0,
+            indeterminate: true, // Animated swiggly progress bar
+          },
         }),
       },
-      trigger: null, // Show immediately
+      trigger: null,
     });
 
-    console.log('[Notifications] Foreground service notification started');
+    console.log('[Notifications] Material 3 notification started (indeterminate)');
   } catch (error) {
     console.error('[Notifications] Error showing start notification:', error);
   }
 }
 
 /**
- * Update notification with current progress
- * Updates the foreground service notification
+ * Update notification with current progress - Material 3 design
+ * Updates the foreground service notification with smooth progress bar
+ *
+ * Design Features:
+ * - Determinate progress bar (smooth fill animation)
+ * - Clear numerical feedback (progress/total)
+ * - Percentage display for quick reference
+ * - Minimalist typography
+ * - Maintains Material 3 visual hierarchy
  */
 export async function updateQueueProgressNotification(
   progress: number,
@@ -154,29 +198,33 @@ export async function updateQueueProgressNotification(
 ): Promise<void> {
   try {
     const percentage = Math.round((progress / total) * 100);
+    const remaining = total - progress;
 
     await Notifications.scheduleNotificationAsync({
       identifier: NOTIFICATION_ID,
       content: {
-        title: '🎵 Queueing Tracks',
-        body: `${progress}/${total} tracks queued (${percentage}%)`,
-        color: '#1DB954',
+        title: 'Queueing to Spotify',
+        body: `${progress} of ${total} tracks • ${remaining} remaining`,
+        subtitle: `${percentage}% complete`, // Material 3 secondary text
+        color: '#1DB954', // Spotify green accent
         priority: Notifications.AndroidNotificationPriority.LOW,
-        sticky: true, // Keep notification visible
+        sticky: true,
         autoDismiss: false,
         data: {
           type: 'queue-progress',
           progress,
           total,
+          percentage,
+          playlistName,
           isForegroundService: true,
         },
         ...(Platform.OS === 'android' && {
           channelId: QUEUE_CHANNEL_ID,
-          // Android progress bar
+          // Determinate progress bar - smooth fill animation
           progress: {
             max: total,
             current: progress,
-            indeterminate: false,
+            indeterminate: false, // Smooth progress bar
           },
         }),
       },
@@ -188,7 +236,13 @@ export async function updateQueueProgressNotification(
 }
 
 /**
- * Show completion notification
+ * Show completion notification - Material 3 design
+ *
+ * Design Features:
+ * - Success-oriented messaging
+ * - Auto-dismissible after delay
+ * - Clean, celebratory design
+ * - Contextual information about remaining tracks
  */
 export async function showQueueCompleteNotification(
   totalQueued: number,
@@ -196,40 +250,57 @@ export async function showQueueCompleteNotification(
   remainingTracks?: number
 ): Promise<void> {
   try {
-    const body = remainingTracks && remainingTracks > 0
-      ? `✅ ${totalQueued} tracks queued! ${remainingTracks} unheard songs remaining.`
-      : `✅ ${totalQueued} tracks queued successfully!`;
+    const hasRemaining = remainingTracks && remainingTracks > 0;
+    const body = hasRemaining
+      ? `${totalQueued} tracks ready to play`
+      : `All ${totalQueued} tracks queued`;
+
+    const subtitle = hasRemaining
+      ? `${remainingTracks} unheard tracks remaining in playlist`
+      : 'Enjoy your music!';
 
     await Notifications.scheduleNotificationAsync({
       identifier: NOTIFICATION_ID,
       content: {
-        title: '🎉 Queue Complete',
+        title: 'Queue Complete',
         body,
-        color: '#1DB954',
+        subtitle, // Material 3 secondary text
+        color: '#1DB954', // Success green
         priority: Notifications.AndroidNotificationPriority.DEFAULT,
-        sticky: false,
+        sticky: false, // Allow user dismissal
         autoDismiss: true,
-        data: { 
+        data: {
           type: 'queue-complete',
           totalQueued,
+          remainingTracks,
+          playlistName,
         },
+        ...(Platform.OS === 'android' && {
+          channelId: QUEUE_CHANNEL_ID,
+        }),
       },
       trigger: null,
     });
 
-    console.log('[Notifications] Queue complete notification shown');
+    console.log('[Notifications] Material 3 completion notification shown');
 
-    // Auto-dismiss after 3 seconds
+    // Auto-dismiss after 4 seconds (slightly longer to read remaining tracks info)
     setTimeout(() => {
       dismissNotification();
-    }, 3000);
+    }, 4000);
   } catch (error) {
     console.error('[Notifications] Error showing complete notification:', error);
   }
 }
 
 /**
- * Show error notification
+ * Show error notification - Material 3 design
+ *
+ * Design Features:
+ * - Clear error indication
+ * - Actionable error message
+ * - Higher priority for visibility
+ * - Dismissible after reading
  */
 export async function showQueueErrorNotification(
   errorMessage: string = 'An error occurred while queueing tracks'
@@ -238,21 +309,30 @@ export async function showQueueErrorNotification(
     await Notifications.scheduleNotificationAsync({
       identifier: NOTIFICATION_ID,
       content: {
-        title: '❌ Queue Failed',
-        body: errorMessage,
-        color: '#ff6b35', // Error red
-        priority: Notifications.AndroidNotificationPriority.HIGH,
+        title: 'Queue Failed',
+        body: 'Unable to queue tracks',
+        subtitle: errorMessage, // Detailed error in subtitle
+        color: '#DC362E', // Material 3 error red
+        priority: Notifications.AndroidNotificationPriority.HIGH, // Higher visibility for errors
         sticky: false,
         autoDismiss: true,
-        data: { type: 'queue-error' },
+        data: {
+          type: 'queue-error',
+          errorMessage,
+        },
+        ...(Platform.OS === 'android' && {
+          channelId: QUEUE_CHANNEL_ID,
+        }),
       },
       trigger: null,
     });
 
-    // Auto-dismiss after 5 seconds
+    console.log('[Notifications] Material 3 error notification shown');
+
+    // Auto-dismiss after 6 seconds (longer to read error details)
     setTimeout(() => {
       dismissNotification();
-    }, 5000);
+    }, 6000);
   } catch (error) {
     console.error('[Notifications] Error showing error notification:', error);
   }

@@ -132,12 +132,20 @@ async function clearQueueState(): Promise<void> {
 // ============================================================================
 
 /**
- * Process the queue by adding tracks one by one
+ * Process the queue by adding tracks one by one with smart progress updates
+ *
+ * Update Strategy (near real-time):
+ * - Update every 3 tracks OR every 2 seconds (whichever comes first)
+ * - Always update on completion
+ * - Provides smooth visual feedback without excessive updates
  */
 async function processQueue(state: QueueTaskState): Promise<void> {
   const { tracks, deviceId, currentIndex, totalTracks, playlistName } = state;
 
   console.log(`[QueueBackgroundService] Processing queue from index ${currentIndex}`);
+
+  let lastUpdateTime = Date.now();
+  let lastUpdateIndex = currentIndex;
 
   // Process remaining tracks
   for (let i = currentIndex; i < tracks.length; i++) {
@@ -151,9 +159,18 @@ async function processQueue(state: QueueTaskState): Promise<void> {
       state.currentIndex = i + 1;
       await saveQueueState(state);
 
-      // Update notification every 10 tracks or on completion
-      if ((i + 1) % 10 === 0 || (i + 1) === totalTracks) {
+      const tracksSinceUpdate = (i + 1) - lastUpdateIndex;
+      const timeSinceUpdate = Date.now() - lastUpdateTime;
+      const isComplete = (i + 1) === totalTracks;
+
+      // Smart update logic: Update every 3 tracks OR every 2 seconds OR on completion
+      const shouldUpdate = tracksSinceUpdate >= 3 || timeSinceUpdate >= 2000 || isComplete;
+
+      if (shouldUpdate) {
         await updateQueueProgressNotification(i + 1, totalTracks, playlistName);
+        lastUpdateTime = Date.now();
+        lastUpdateIndex = i + 1;
+        console.log(`[QueueBackgroundService] Progress update: ${i + 1}/${totalTracks} (${Math.round(((i + 1) / totalTracks) * 100)}%)`);
       }
 
       // Respect API rate limits - 150ms between requests
@@ -161,7 +178,9 @@ async function processQueue(state: QueueTaskState): Promise<void> {
         await new Promise(resolve => setTimeout(resolve, 150));
       }
 
-      console.log(`[QueueBackgroundService] Queued track ${i + 1}/${totalTracks}`);
+      if ((i + 1) % 20 === 0 || isComplete) {
+        console.log(`[QueueBackgroundService] Queued ${i + 1}/${totalTracks} tracks`);
+      }
     } catch (error) {
       console.error(`[QueueBackgroundService] Error queueing track ${i + 1}:`, error);
 
