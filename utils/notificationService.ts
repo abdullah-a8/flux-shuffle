@@ -1,25 +1,36 @@
 /**
  * Notification Service
- * 
- * Handles persistent notifications for queue progress on Android/iOS
- * Shows clean, minimal green-styled notifications for track queueing
+ *
+ * Handles foreground service notifications for Android background queueing.
+ *
+ * CRITICAL ANDROID BEHAVIOR:
+ * - Persistent notifications (sticky: true) act as foreground service notifications
+ * - This keeps the JavaScript thread alive when the app is backgrounded
+ * - Without this, Android will suspend JS execution and queueing stops
+ * - The notification MUST remain visible while queueing is in progress
+ *
+ * Architecture:
+ * - Uses expo-notifications for cross-platform notification API
+ * - Integrates with queueBackgroundService.ts for background task execution
+ * - Provides progress updates via notification updates (not push)
  */
 
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 
-// Notification channel ID for queue progress
+// Notification channel ID for queue progress (foreground service channel)
 const QUEUE_CHANNEL_ID = 'queue-progress';
 const NOTIFICATION_ID = 'queue-notification';
 
 // Configure how notifications should be handled when app is in foreground
+// These settings ensure the foreground service notification is always visible
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: false,
-    shouldSetBadge: false,
+    shouldShowBanner: true, // Show banner even in foreground
+    shouldShowList: true, // Show in notification list
+    shouldPlaySound: false, // Silent notifications for progress
+    shouldSetBadge: false, // No badge updates
   }),
 });
 
@@ -68,6 +79,9 @@ export async function requestNotificationPermissions(): Promise<boolean> {
 /**
  * Setup Android notification channel
  * Required for Android 8.0+
+ *
+ * This channel is used for foreground service notifications
+ * that keep the background queueing process alive
  */
 export async function setupNotificationChannel(): Promise<void> {
   if (Platform.OS !== 'android') {
@@ -77,18 +91,18 @@ export async function setupNotificationChannel(): Promise<void> {
   try {
     await Notifications.setNotificationChannelAsync(QUEUE_CHANNEL_ID, {
       name: 'Queue Progress',
-      description: 'Shows progress when queueing tracks to Spotify',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      description: 'Shows progress when queueing tracks to Spotify. Required for background operation.',
+      importance: Notifications.AndroidImportance.LOW, // Low to avoid interruption
       sound: null, // No sound for progress notifications
       vibrationPattern: [0],
       enableVibrate: false,
       showBadge: false,
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-      enableLights: true,
-      lightColor: '#1DB954', // Spotify green
+      enableLights: false, // No LED light for progress
+      bypassDnd: false, // Don't bypass Do Not Disturb
     });
 
-    console.log('[Notifications] Channel created');
+    console.log('[Notifications] Foreground service channel created');
   } catch (error) {
     console.error('[Notifications] Error creating channel:', error);
   }
@@ -96,6 +110,7 @@ export async function setupNotificationChannel(): Promise<void> {
 
 /**
  * Show initial queueing notification
+ * This acts as the foreground service notification on Android
  */
 export async function showQueueStartNotification(
   playlistName: string,
@@ -108,15 +123,21 @@ export async function showQueueStartNotification(
         title: '🎵 Queueing Tracks',
         body: `Preparing ${totalTracks} tracks from ${playlistName}...`,
         color: '#1DB954', // Spotify green
-        priority: Notifications.AndroidNotificationPriority.DEFAULT,
-        sticky: true, // Keep notification visible
-        autoDismiss: false,
-        data: { type: 'queue-progress' },
+        priority: Notifications.AndroidNotificationPriority.LOW, // Low priority to not interrupt
+        sticky: true, // Keep notification visible - CRITICAL for foreground service
+        autoDismiss: false, // Don't auto-dismiss - required for foreground service
+        data: {
+          type: 'queue-progress',
+          isForegroundService: true, // Mark as foreground service notification
+        },
+        ...(Platform.OS === 'android' && {
+          channelId: QUEUE_CHANNEL_ID, // Explicitly set channel
+        }),
       },
       trigger: null, // Show immediately
     });
 
-    console.log('[Notifications] Queue start notification shown');
+    console.log('[Notifications] Foreground service notification started');
   } catch (error) {
     console.error('[Notifications] Error showing start notification:', error);
   }
@@ -124,6 +145,7 @@ export async function showQueueStartNotification(
 
 /**
  * Update notification with current progress
+ * Updates the foreground service notification
  */
 export async function updateQueueProgressNotification(
   progress: number,
@@ -132,31 +154,31 @@ export async function updateQueueProgressNotification(
 ): Promise<void> {
   try {
     const percentage = Math.round((progress / total) * 100);
-    
+
     await Notifications.scheduleNotificationAsync({
       identifier: NOTIFICATION_ID,
       content: {
         title: '🎵 Queueing Tracks',
         body: `${progress}/${total} tracks queued (${percentage}%)`,
         color: '#1DB954',
-        priority: Notifications.AndroidNotificationPriority.DEFAULT,
-        sticky: true,
+        priority: Notifications.AndroidNotificationPriority.LOW,
+        sticky: true, // Keep notification visible
         autoDismiss: false,
-        // Android progress bar
-        ...(Platform.OS === 'android' && {
-          android: {
-            progress: {
-              max: total,
-              current: progress,
-              indeterminate: false,
-            },
-          },
-        }),
-        data: { 
+        data: {
           type: 'queue-progress',
           progress,
           total,
+          isForegroundService: true,
         },
+        ...(Platform.OS === 'android' && {
+          channelId: QUEUE_CHANNEL_ID,
+          // Android progress bar
+          progress: {
+            max: total,
+            current: progress,
+            indeterminate: false,
+          },
+        }),
       },
       trigger: null,
     });

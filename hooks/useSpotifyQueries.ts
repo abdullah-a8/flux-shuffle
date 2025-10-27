@@ -3,12 +3,10 @@ import { SpotifyService } from '@/utils/spotify';
 import type { SpotifyUser, SpotifyPlaylist, SpotifyTrack } from '@/types/spotify';
 import { getSmartShuffledTracks, type ShuffleStats } from '@/utils/smartShuffle';
 import {
-  showQueueStartNotification,
-  updateQueueProgressNotification,
-  showQueueCompleteNotification,
   showQueueErrorNotification,
   dismissNotification,
 } from '@/utils/notificationService';
+import { startBackgroundQueue } from '@/services/queueBackgroundService';
 
 const spotifyService = SpotifyService;
 
@@ -110,61 +108,8 @@ export interface QueueShuffleProgress {
   message: string | null;
 }
 
-async function batchQueueTracks({
-  tracks,
-  deviceId,
-  onProgress,
-}: {
-  tracks: SpotifyTrack[];
-  deviceId: string;
-  onProgress: (progress: { progress: number; total: number }) => void;
-}) {
-  const trackUris = tracks.map(t => t.uri);
-  const total = trackUris.length;
-  let completed = 0;
-
-  // Queue tracks one by one to avoid rate limiting
-  for (let i = 0; i < trackUris.length; i++) {
-    const uri = trackUris[i];
-    
-    // Retry logic with exponential backoff for 429 errors
-    let retryCount = 0;
-    const maxRetries = 3;
-    let success = false;
-    
-    while (!success && retryCount <= maxRetries) {
-      try {
-        await spotifyService.addToQueue(uri, deviceId);
-        success = true;
-      } catch (error: any) {
-        if (error?.status === 429 || (error?.message && error.message.includes('429'))) {
-          retryCount++;
-          if (retryCount <= maxRetries) {
-            // Exponential backoff: 1s, 2s, 4s
-            const delay = Math.pow(2, retryCount - 1) * 1000;
-            console.log(`Rate limited, retrying in ${delay}ms (attempt ${retryCount}/${maxRetries})`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-          } else {
-            console.error(`Failed to queue track after ${maxRetries} retries:`, error);
-            // Continue with next track instead of failing completely
-          }
-        } else {
-          console.error('Error queueing track:', error);
-          break; // Don't retry for non-rate-limit errors
-        }
-      }
-    }
-
-    completed++;
-    onProgress({ progress: completed, total });
-
-    // Add delay between requests to be respectful to the API
-    // Skip delay on the last track
-    if (i < trackUris.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 150)); // 150ms between requests
-    }
-  }
-}
+// NOTE: batchQueueTracks has been removed and replaced with startBackgroundQueue
+// from queueBackgroundService.ts which handles background execution properly
 
 export function useQueueShuffleMutation() {
   const queryClient = useQueryClient();
@@ -215,9 +160,6 @@ export function useQueueShuffleMutation() {
         console.log('✨ [QueueShuffle] Cycle complete! Starting fresh with all songs.');
       }
 
-      // Show initial notification
-      await showQueueStartNotification(playlist.name, smartShuffledTracks.length);
-
       // Get Device and Play First Track
       const playlistUri = playlist.id === 'liked-songs' ? 'spotify:collection:tracks' : playlist.uri;
       const ensuredDeviceId = await spotifyService.ensureActiveDevice(first.uri, playlistUri);
@@ -228,27 +170,20 @@ export function useQueueShuffleMutation() {
       await spotifyService.transferPlayback(ensuredDeviceId, true);
       await spotifyService.playUris([first.uri], ensuredDeviceId);
 
-      // Queue the tracks with progress updates
-      await batchQueueTracks({
-        tracks: rest,
+      // Start background queue process with foreground service
+      // This will continue even if the app is backgrounded
+      const success = await startBackgroundQueue({
+        playlistId: playlist.id,
+        playlistName: playlist.name,
+        tracks: smartShuffledTracks,
         deviceId: ensuredDeviceId,
-        onProgress: ({ progress, total }) => {
-          // Update notification every 10 tracks or on completion
-          if (progress % 10 === 0 || progress === total) {
-            updateQueueProgressNotification(progress, total, playlist.name);
-          }
+        firstTrackUri: first.uri,
+        stats: {
+          remaining: stats.remaining,
         },
       });
 
-      // Show completion notification
-      const totalProcessed = totalToQueue + 1;
-      await showQueueCompleteNotification(
-        totalProcessed, 
-        playlist.name,
-        stats.remaining
-      );
-
-      return true;
+      return success;
     },
     onError: (error) => {
       if (error instanceof CancelledError) {
