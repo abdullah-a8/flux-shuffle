@@ -1,10 +1,32 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, ScrollView } from 'react-native';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { useSpotify } from '@/contexts/SpotifyContext';
 import { LogOut, Mail, Crown } from 'lucide-react-native';
 
 export default function ProfileTab() {
   const { user, logout } = useSpotify();
+  const scale = useSharedValue(1);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: scale.value }],
+    };
+  });
+
+  const handlePressIn = () => {
+    scale.value = withSpring(0.95, {
+      damping: 15,
+      stiffness: 150,
+    });
+  };
+
+  const handlePressOut = () => {
+    scale.value = withSpring(1, {
+      damping: 15,
+      stiffness: 150,
+    });
+  };
 
   const handleLogout = async () => {
     await logout();
@@ -68,10 +90,16 @@ export default function ProfileTab() {
 
       {/* Fixed Disconnect Button */}
       <View style={styles.footer}>
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <LogOut size={20} color="#dc2626" />
-          <Text style={styles.logoutText}>Disconnect from Spotify</Text>
-        </TouchableOpacity>
+        <Pressable
+          onPress={handleLogout}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+        >
+          <Animated.View style={[styles.logoutButton, animatedStyle]}>
+            <LogOut size={20} color="#dc2626" />
+            <Text style={styles.logoutText}>Disconnect from Spotify</Text>
+          </Animated.View>
+        </Pressable>
       </View>
     </View>
   );
@@ -203,7 +231,7 @@ const styles = StyleSheet.create({
   // Footer Styles
   footer: {
     paddingHorizontal: 24,
-    paddingBottom: 100,
+    paddingBottom: 24,
     paddingTop: 16,
     backgroundColor: '#000',
   },

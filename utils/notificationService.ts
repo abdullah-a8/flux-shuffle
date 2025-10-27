@@ -11,19 +11,24 @@
  * - The notification MUST remain visible while queueing is in progress
  *
  * MATERIAL 3 DESIGN FEATURES:
- * 1. **Indeterminate Progress** - Swiggly animation during initialization
- * 2. **Determinate Progress** - Smooth fill animation during queueing
- * 3. **Visual Hierarchy** - Title/body/subtitle for clear information structure
+ * 1. **Visual Hierarchy** - Title/body/subtitle for clear information structure
+ * 2. **Text-Based Progress** - Clear numerical progress (e.g., "50 of 150 tracks")
+ * 3. **Percentage Display** - Quick reference (e.g., "33% complete")
  * 4. **Minimal Interruption** - LOW importance, silent, no vibration
  * 5. **Smart Updates** - Update every 3 tracks OR 2 seconds (near real-time)
  * 6. **Spotify Brand Integration** - #1DB954 green accent throughout
  * 7. **Clean Typography** - Professional, readable messaging
  *
  * PROGRESS UPDATE STRATEGY:
- * - Initial: Indeterminate "swiggly" progress bar
- * - During: Determinate progress bar updated every 3 tracks or 2 seconds
+ * - Initial: "Starting..." with total track count
+ * - During: Text updates every 3 tracks or 2 seconds with percentage
  * - Completion: Success message with remaining tracks info
  * - Error: Clear error indication with detailed subtitle
+ *
+ * TECHNICAL NOTES:
+ * - Expo Notifications API doesn't support native Android progress bars
+ * - Text-based progress provides excellent UX with maximum compatibility
+ * - Updates are optimized for battery/performance
  *
  * Architecture:
  * - Uses expo-notifications for cross-platform notification API
@@ -135,10 +140,12 @@ export async function setupNotificationChannel(): Promise<void> {
  * This acts as the foreground service notification on Android
  *
  * Design Features:
- * - Indeterminate progress bar (swiggly animation)
- * - Clean typography
+ * - Clean typography with visual hierarchy
  * - Spotify brand color accent
  * - Persistent and non-dismissible during operation
+ *
+ * Note: Expo Notifications API doesn't support native Android progress bars.
+ * Progress is shown via text updates for maximum compatibility.
  */
 export async function showQueueStartNotification(
   playlistName: string,
@@ -150,7 +157,7 @@ export async function showQueueStartNotification(
       content: {
         title: 'Queueing to Spotify',
         body: `${totalTracks} tracks from ${playlistName}`,
-        subtitle: 'Preparing tracks...', // Secondary text for Material 3 hierarchy
+        subtitle: 'Starting...', // Secondary text for Material 3 hierarchy
         color: '#1DB954', // Spotify brand green - Material 3 accent
         priority: Notifications.AndroidNotificationPriority.LOW,
         sticky: true, // CRITICAL: Keeps foreground service alive
@@ -161,20 +168,11 @@ export async function showQueueStartNotification(
           playlistName,
           totalTracks,
         },
-        ...(Platform.OS === 'android' && {
-          channelId: QUEUE_CHANNEL_ID,
-          // Indeterminate progress - Material 3 "swiggly" animation
-          progress: {
-            max: 0,
-            current: 0,
-            indeterminate: true, // Animated swiggly progress bar
-          },
-        }),
       },
       trigger: null,
     });
 
-    console.log('[Notifications] Material 3 notification started (indeterminate)');
+    console.log('[Notifications] Material 3 notification started');
   } catch (error) {
     console.error('[Notifications] Error showing start notification:', error);
   }
@@ -182,14 +180,16 @@ export async function showQueueStartNotification(
 
 /**
  * Update notification with current progress - Material 3 design
- * Updates the foreground service notification with smooth progress bar
+ * Updates the foreground service notification with near real-time progress
  *
  * Design Features:
- * - Determinate progress bar (smooth fill animation)
  * - Clear numerical feedback (progress/total)
  * - Percentage display for quick reference
  * - Minimalist typography
  * - Maintains Material 3 visual hierarchy
+ *
+ * Note: Text-based progress updates provide excellent UX without requiring
+ * native Android progress bar APIs not available in Expo.
  */
 export async function updateQueueProgressNotification(
   progress: number,
@@ -218,15 +218,6 @@ export async function updateQueueProgressNotification(
           playlistName,
           isForegroundService: true,
         },
-        ...(Platform.OS === 'android' && {
-          channelId: QUEUE_CHANNEL_ID,
-          // Determinate progress bar - smooth fill animation
-          progress: {
-            max: total,
-            current: progress,
-            indeterminate: false, // Smooth progress bar
-          },
-        }),
       },
       trigger: null,
     });
