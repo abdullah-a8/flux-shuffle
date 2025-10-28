@@ -766,8 +766,41 @@ export async function hasActiveDevice(): Promise<boolean> {
     console.log('[SpotifyService] devices ->', devices);
     return devices ? devices.some(device => device.is_active) || devices.length > 0 : false;
   } catch (error) {
-
     console.error('[SpotifyService] Error checking active device:', error);
+    return false;
+  }
+}
+
+/**
+ * Verify a specific device is still active and available
+ * Used during long-running queue operations to ensure device hasn't disconnected
+ *
+ * @param deviceId - The device ID to check
+ * @returns Promise<boolean> - true if device is still active and available
+ */
+export async function verifyDeviceHealth(deviceId: string): Promise<boolean> {
+  try {
+    const devices = await getDevices();
+
+    if (!devices || devices.length === 0) {
+      console.warn('[SpotifyService] No devices available');
+      return false;
+    }
+
+    // Find the specific device
+    const targetDevice = devices.find(d => d.id === deviceId);
+
+    if (!targetDevice) {
+      console.warn(`[SpotifyService] Device ${deviceId} not found in available devices`);
+      return false;
+    }
+
+    // Device exists in the list, which means it's available
+    // We don't require it to be active since Spotify API can transfer playback
+    console.log(`[SpotifyService] Device ${deviceId} health check: ✅ ${targetDevice.name} (active: ${targetDevice.is_active})`);
+    return true;
+  } catch (error) {
+    console.error('[SpotifyService] Error verifying device health:', error);
     return false;
   }
 }
@@ -821,6 +854,7 @@ export const SpotifyService = {
   setShuffle,
   transferPlayback,
   addToQueue,
+  verifyDeviceHealth,
 };
 
 // Generate cryptographically secure random number between 0 and 1

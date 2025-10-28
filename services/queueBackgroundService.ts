@@ -21,6 +21,7 @@ import {
   showQueueErrorNotification,
   dismissNotification,
 } from '@/utils/notificationService';
+import { markTracksAsPlayed, rollbackUnqueuedTracks, validateTrackUris } from '@/utils/smartShuffle';
 
 // ============================================================================
 // Constants
@@ -59,7 +60,8 @@ interface QueueTaskState {
 TaskManager.defineTask(QUEUE_BACKGROUND_TASK, async ({ data, error }) => {
   if (error) {
     console.error('[QueueBackgroundTask] Task error:', error);
-    await handleTaskError(error.message);
+    const state = await loadQueueState();
+    await handleTaskError(state, error.message);
     return;
   }
 
@@ -78,7 +80,8 @@ TaskManager.defineTask(QUEUE_BACKGROUND_TASK, async ({ data, error }) => {
     await processQueue(state);
   } catch (error) {
     console.error('[QueueBackgroundTask] Error processing queue:', error);
-    await handleTaskError(error instanceof Error ? error.message : 'Unknown error');
+    const state = await loadQueueState();
+    await handleTaskError(state, error instanceof Error ? error.message : 'Unknown error');
   }
 });
 
@@ -138,6 +141,10 @@ async function clearQueueState(): Promise<void> {
  * - Update every 3 tracks OR every 2 seconds (whichever comes first)
  * - Always update on completion
  * - Provides smooth visual feedback without excessive updates
+ *
+ * Device Health Checks:
+ * - Check device health every 25 tracks
+ * - Ensures device hasn't disconnected during long queue operations
  */
 async function processQueue(state: QueueTaskState): Promise<void> {
   const { tracks, deviceId, currentIndex, totalTracks, playlistName } = state;
@@ -152,6 +159,21 @@ async function processQueue(state: QueueTaskState): Promise<void> {
     const trackUri = tracks[i];
 
     try {
+      // ✅ Device Health Check: Verify device is still available every 25 tracks
+      if (i > 0 && i % 25 === 0) {
+        console.log(`[QueueBackgroundService] Checking device health at track ${i + 1}/${totalTracks}`);
+
+        const deviceHealthy = await SpotifyService.verifyDeviceHealth(deviceId);
+
+        if (!deviceHealthy) {
+          const errorMsg = `Device disconnected or unavailable during queueing (at track ${i + 1}/${totalTracks})`;
+          console.error(`[QueueBackgroundService] ${errorMsg}`);
+          await handleTaskError(state, errorMsg);
+          return;
+        }
+
+        console.log(`[QueueBackgroundService] Device health check passed ✅`);
+      }
       // Queue the track with retry logic
       await queueTrackWithRetry(trackUri, deviceId);
 
@@ -186,7 +208,7 @@ async function processQueue(state: QueueTaskState): Promise<void> {
 
       // If we hit an unrecoverable error, stop and notify
       if (error instanceof Error && !error.message.includes('429')) {
-        await handleTaskError(`Failed to queue track ${i + 1}: ${error.message}`);
+        await handleTaskError(state, `Failed to queue track ${i + 1}: ${error.message}`);
         return;
       }
     }
@@ -233,6 +255,25 @@ async function queueTrackWithRetry(
 async function handleTaskComplete(state: QueueTaskState): Promise<void> {
   console.log('[QueueBackgroundService] Queue completed successfully');
 
+  try {
+    // ✅ CRITICAL: Mark all tracks as played in shuffle memory
+    // This happens ONLY after ALL tracks have been successfully queued
+    const trackIds = state.tracks.map(uri => {
+      const parts = uri.split(':');
+      return parts[parts.length - 1]; // Extract track ID from URI
+    });
+
+    const marked = await markTracksAsPlayed(state.playlistId, trackIds);
+
+    if (!marked) {
+      console.error('[QueueBackgroundService] Failed to mark tracks as played - data integrity issue!');
+      // Continue with completion despite this error
+    }
+  } catch (error) {
+    console.error('[QueueBackgroundService] Error marking tracks as played:', error);
+    // Continue with completion despite this error
+  }
+
   // Show completion notification
   await showQueueCompleteNotification(
     state.totalTracks,
@@ -245,10 +286,35 @@ async function handleTaskComplete(state: QueueTaskState): Promise<void> {
 }
 
 /**
- * Handle task error
+ * Handle task error with rollback support
  */
-async function handleTaskError(errorMessage: string): Promise<void> {
+async function handleTaskError(state: QueueTaskState | null, errorMessage: string): Promise<void> {
   console.error('[QueueBackgroundService] Task failed:', errorMessage);
+
+  // ✅ CRITICAL: Rollback unqueued tracks from shuffle memory
+  if (state && state.currentIndex < state.tracks.length) {
+    try {
+      console.log(`[QueueBackgroundService] Rolling back ${state.tracks.length - state.currentIndex} unqueued tracks`);
+
+      // Calculate which tracks were NOT queued
+      const unqueuedTracks = state.tracks.slice(state.currentIndex);
+      const unqueuedTrackIds = unqueuedTracks.map(uri => {
+        const parts = uri.split(':');
+        return parts[parts.length - 1]; // Extract track ID from URI
+      });
+
+      // Rollback these tracks from shuffle memory
+      const rolledBack = await rollbackUnqueuedTracks(state.playlistId, unqueuedTrackIds);
+
+      if (rolledBack) {
+        console.log(`[QueueBackgroundService] ✅ Successfully rolled back ${unqueuedTrackIds.length} tracks`);
+      } else {
+        console.error('[QueueBackgroundService] ❌ Failed to rollback tracks - data integrity issue!');
+      }
+    } catch (error) {
+      console.error('[QueueBackgroundService] Error during rollback:', error);
+    }
+  }
 
   // Show error notification
   await showQueueErrorNotification(errorMessage);
@@ -285,14 +351,41 @@ export async function startBackgroundQueue(params: {
     console.log(`[QueueBackgroundService] Starting background queue for ${playlistName}`);
     console.log(`[QueueBackgroundService] Total tracks to queue: ${trackUris.length}`);
 
+    // ✅ CRITICAL: Validate all track URIs before queueing
+    const validation = validateTrackUris(trackUris);
+
+    if (validation.invalidCount > 0) {
+      console.error(`[QueueBackgroundService] ❌ Found ${validation.invalidCount} invalid URIs`);
+      validation.invalidUris.forEach((uri, idx) => {
+        console.error(`  ${idx + 1}. Invalid URI: ${uri}`);
+      });
+
+      // If more than 10% of URIs are invalid, abort
+      const invalidPercentage = (validation.invalidCount / trackUris.length) * 100;
+      if (invalidPercentage > 10) {
+        throw new Error(
+          `Too many invalid URIs: ${validation.invalidCount}/${trackUris.length} (${invalidPercentage.toFixed(1)}%). Aborting queue operation.`
+        );
+      }
+
+      console.warn(
+        `[QueueBackgroundService] ⚠️  Proceeding with ${validation.validUris.length} valid URIs, skipping ${validation.invalidCount} invalid ones`
+      );
+    } else {
+      console.log(`[QueueBackgroundService] ✅ All ${trackUris.length} URIs validated successfully`);
+    }
+
+    // Use only validated URIs for queueing
+    const validatedTrackUris = validation.validUris;
+
     // Create initial state
     const state: QueueTaskState = {
       playlistId,
       playlistName,
-      tracks: trackUris,
+      tracks: validatedTrackUris, // ✅ Use validated URIs instead of raw trackUris
       deviceId,
       currentIndex: 0,
-      totalTracks: trackUris.length,
+      totalTracks: validatedTrackUris.length, // ✅ Use validated count
       isActive: true,
       startedAt: Date.now(),
       stats,
@@ -311,7 +404,9 @@ export async function startBackgroundQueue(params: {
     return true;
   } catch (error) {
     console.error('[QueueBackgroundService] Error starting background queue:', error);
-    await showQueueErrorNotification(
+    const state = await loadQueueState();
+    await handleTaskError(
+      state,
       error instanceof Error ? error.message : 'Failed to start queueing'
     );
     return false;
