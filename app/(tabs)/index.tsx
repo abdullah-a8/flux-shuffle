@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { useSpotify } from '@/contexts/SpotifyContext';
-import { useQueueShuffleMutation } from '@/hooks/useSpotifyQueries';
+import { useQueueShuffleMutation, useSpotifyDevices } from '@/hooks/useSpotifyQueries';
 import { useRouter } from 'expo-router';
 import { Music, Play, AlertCircle } from 'lucide-react-native';
 import AlertModal from '@/components/AlertModal';
-import { hasActiveDevice, hasQueuedSongs, openSpotifyApp } from '@/utils/spotify';
+import { hasQueuedSongs, openSpotifyApp } from '@/utils/spotify';
 import { initializeNotifications } from '@/utils/notificationService';
+import { addRecentPlaylist } from '@/utils/recentPlaylists';
 import type { SpotifyPlaylist } from '@/types/spotify';
 
 // Animated Playlist Card Component
@@ -119,6 +120,9 @@ export default function HomeTab() {
   // Queue mutation (now uses notifications)
   const { mutate: shufflePlaylist, isPending } = useQueueShuffleMutation();
 
+  // Device query with caching
+  const { data: devices = [], refetch: refetchDevices } = useSpotifyDevices(isAuthenticated);
+
   // Initialize notifications on mount
   useEffect(() => {
     initializeNotifications().then(hasPermission => {
@@ -134,16 +138,20 @@ export default function HomeTab() {
 
   const handlePlaylistSelect = async (playlist: SpotifyPlaylist) => {
     try {
-      // Check for active device first
-      const hasDevice = await hasActiveDevice();
+      // Check for active device using cached devices
+      const hasDevice = devices && devices.length > 0;
       if (!hasDevice) {
-        setAlertModal({
-          isVisible: true,
-          type: 'no-device',
-          pendingPlaylist: playlist,
-          queueCount: 0,
-        });
-        return;
+        // Refetch devices to be sure before showing error
+        const { data: freshDevices } = await refetchDevices();
+        if (!freshDevices || freshDevices.length === 0) {
+          setAlertModal({
+            isVisible: true,
+            type: 'no-device',
+            pendingPlaylist: playlist,
+            queueCount: 0,
+          });
+          return;
+        }
       }
 
       // Check if queue has songs
@@ -157,6 +165,9 @@ export default function HomeTab() {
         });
         return;
       }
+
+      // Add to recent playlists
+      await addRecentPlaylist(playlist.id);
 
       // All checks passed, proceed with shuffle
       proceedWithShuffle(playlist);
@@ -188,13 +199,14 @@ export default function HomeTab() {
         if (attempt > maxAttempts || !pendingPlaylist) {
           return;
         }
-        
+
         const delay = 2000 * attempt; // 2s, 4s, 6s
         await new Promise(resolve => setTimeout(resolve, delay));
 
-        // Check if device is available now
-        const hasDevice = await hasActiveDevice();
-        
+        // Check if device is available now by refetching devices
+        const { data: freshDevices } = await refetchDevices();
+        const hasDevice = freshDevices && freshDevices.length > 0;
+
         if (hasDevice) {
           // Device found! Proceed with shuffle
           await handlePlaylistSelect(pendingPlaylist);
@@ -218,8 +230,10 @@ export default function HomeTab() {
     } else {
       // For other alerts, just close and retry
       setAlertModal({ isVisible: false, type: 'generic', pendingPlaylist: null, queueCount: 0 });
-      
+
       if (pendingPlaylist) {
+        // Refetch devices before retrying
+        await refetchDevices();
         // Re-run the checks and proceed if they pass
         await handlePlaylistSelect(pendingPlaylist);
       }

@@ -145,23 +145,38 @@ export function SpotifyProvider({ children }: { children: ReactNode }) {
 
   const login = async (): Promise<boolean> => {
     const success = await spotifyService.authenticate();
-    
+
     if (success) {
       await refetchUser();
       setNeedsReauth(false); // Reset reauth flag on successful login
-      
-      // Prefetch saved tracks in the background after successful login
+
+      // Prefetch saved tracks and top playlists in the background after successful login
       setTimeout(() => {
+        // Prefetch saved tracks
         queryClient.prefetchQuery({
           queryKey: spotifyQueryKeys.savedTracks,
           queryFn: () => spotifyService.getUserSavedTracks(),
           staleTime: 15 * 60 * 1000,
         });
+
+        // Prefetch top 3 playlists (will be available after playlists are loaded)
+        setTimeout(() => {
+          if (playlists.length > 0) {
+            const topPlaylists = playlists.slice(0, 3);
+            topPlaylists.forEach(playlist => {
+              queryClient.prefetchQuery({
+                queryKey: spotifyQueryKeys.playlistTracks(playlist.id),
+                queryFn: () => spotifyService.getPlaylistTracks(playlist.id),
+                staleTime: 15 * 60 * 1000,
+              });
+            });
+          }
+        }, 2000); // Wait a bit more for playlists to load
       }, 1000); // Small delay to let the main UI load first
-      
+
       return true;
     }
-    
+
     return false;
   };
 

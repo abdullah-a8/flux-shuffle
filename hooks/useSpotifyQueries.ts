@@ -16,6 +16,8 @@ export const spotifyQueryKeys = {
   playlists: ['spotify', 'playlists'] as const,
   playlistTracks: (playlistId: string) => ['spotify', 'playlist', playlistId, 'tracks'] as const,
   savedTracks: ['spotify', 'saved-tracks'] as const,
+  devices: ['spotify', 'devices'] as const,
+  queueStatus: ['spotify', 'queue-status'] as const,
 };
 
 // User query
@@ -25,7 +27,8 @@ export function useSpotifyUser() {
     queryFn: async (): Promise<SpotifyUser | null> => {
       return await spotifyService.getCurrentUser();
     },
-    staleTime: 10 * 60 * 1000, // 10 minutes
+    staleTime: 30 * 60 * 1000, // 30 minutes - user profile rarely changes
+    gcTime: 60 * 60 * 1000, // 1 hour - keep in cache longer
     retry: 1,
   });
 }
@@ -82,7 +85,7 @@ export function useSpotifySavedTracks(enabled: boolean = true) {
   });
 }
 
-// Playlist tracks query
+// Playlist tracks query with extended caching
 export function usePlaylistTracks(playlistId: string | null, enabled: boolean = true) {
   return useQuery({
     queryKey: playlistId ? spotifyQueryKeys.playlistTracks(playlistId) : ['spotify', 'playlist', 'none', 'tracks'],
@@ -91,7 +94,54 @@ export function usePlaylistTracks(playlistId: string | null, enabled: boolean = 
       return await spotifyService.getPlaylistTracks(playlistId);
     },
     enabled: enabled && !!playlistId,
-    staleTime: 2 * 60 * 1000, // 2 minutes
+    staleTime: 15 * 60 * 1000, // 15 minutes - playlists don't change often
+    gcTime: 30 * 60 * 1000, // 30 minutes - keep in cache longer
+    refetchOnMount: false, // Use cache if available
+    placeholderData: (previousData) => previousData, // Keep previous data while refetching
+  });
+}
+
+// Device list query with short-term caching and auto-refresh
+export function useSpotifyDevices(enabled: boolean = true) {
+  return useQuery({
+    queryKey: spotifyQueryKeys.devices,
+    queryFn: async () => {
+      const devices = await spotifyService.getDevices();
+      return devices ?? [];
+    },
+    enabled,
+    staleTime: 30 * 1000, // 30 seconds - devices can change frequently
+    gcTime: 60 * 1000, // 1 minute - don't keep too long
+    refetchInterval: 30 * 1000, // Auto-refresh every 30 seconds when active
+    retry: 2,
+  });
+}
+
+// Queue status query for real-time progress updates
+interface QueueStatus {
+  isActive: boolean;
+  progress: number;
+  total: number;
+  currentTrack?: string;
+  playlistId?: string;
+  playlistName?: string;
+}
+
+export function useQueueStatus(enabled: boolean = true) {
+  return useQuery({
+    queryKey: spotifyQueryKeys.queueStatus,
+    queryFn: async (): Promise<QueueStatus> => {
+      // This would be implemented to read from AsyncStorage or a service
+      // For now, returning a default inactive state
+      return {
+        isActive: false,
+        progress: 0,
+        total: 0,
+      };
+    },
+    enabled,
+    staleTime: 1 * 1000, // 1 second - needs to be very fresh for progress
+    refetchInterval: enabled ? 1 * 1000 : false, // Poll every second when enabled
   });
 }
 
