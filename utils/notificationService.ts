@@ -241,21 +241,11 @@ export async function showQueueCompleteNotification(
   remainingTracks?: number
 ): Promise<void> {
   try {
-    const hasRemaining = remainingTracks && remainingTracks > 0;
-    const body = hasRemaining
-      ? `${totalQueued} tracks ready to play`
-      : `All ${totalQueued} tracks queued`;
-
-    const subtitle = hasRemaining
-      ? `${remainingTracks} unheard tracks remaining in playlist`
-      : 'Enjoy your music!';
-
     await Notifications.scheduleNotificationAsync({
       identifier: NOTIFICATION_ID,
       content: {
         title: 'Queue Complete',
-        body,
-        subtitle, // Material 3 secondary text
+        body: 'Completed',
         color: '#1DB954', // Success green
         priority: Notifications.AndroidNotificationPriority.DEFAULT,
         sticky: false, // Allow user dismissal
@@ -275,7 +265,7 @@ export async function showQueueCompleteNotification(
 
     console.log('[Notifications] Material 3 completion notification shown');
 
-    // Auto-dismiss after 4 seconds (slightly longer to read remaining tracks info)
+    // Auto-dismiss after 4 seconds
     setTimeout(() => {
       dismissNotification();
     }, 4000);

@@ -2,28 +2,36 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { useSpotify } from '@/contexts/SpotifyContext';
-import { useQueueShuffleMutation, useSpotifyDevices } from '@/hooks/useSpotifyQueries';
-import { useRouter } from 'expo-router';
+import { useQueueShuffleMutation, useSpotifyDevices, usePlaylistProgress } from '@/hooks/useSpotifyQueries';
 import { Music, Play, AlertCircle } from 'lucide-react-native';
 import AlertModal from '@/components/AlertModal';
+import PlaylistProgressIndicator from '@/components/PlaylistProgressIndicator';
 import { hasQueuedSongs, openSpotifyApp } from '@/utils/spotify';
 import { initializeNotifications } from '@/utils/notificationService';
 import { addRecentPlaylist } from '@/utils/recentPlaylists';
 import type { SpotifyPlaylist } from '@/types/spotify';
 
 // Animated Playlist Card Component
-function AnimatedPlaylistCard({ 
-  playlist, 
-  isLoading, 
-  isDisabled, 
-  onPress 
-}: { 
-  playlist: SpotifyPlaylist; 
-  isLoading: boolean; 
-  isDisabled: boolean; 
+function AnimatedPlaylistCard({
+  playlist,
+  isLoading,
+  isDisabled,
+  onPress
+}: {
+  playlist: SpotifyPlaylist;
+  isLoading: boolean;
+  isDisabled: boolean;
   onPress: () => void;
 }) {
   const scale = useSharedValue(1);
+
+  // Fetch progress stats for this playlist
+  // Enable polling only when not currently loading/processing
+  const { data: progressStats } = usePlaylistProgress(
+    playlist.id,
+    playlist.tracks.total,
+    !isLoading && !isDisabled
+  );
 
   const animatedStyle = useAnimatedStyle(() => {
     return {
@@ -45,7 +53,21 @@ function AnimatedPlaylistCard({
     });
   };
 
-  const isLikedSongs = playlist.id === 'liked-songs';
+  // Format metadata with progress info
+  const getMetaText = () => {
+    if (isLoading) {
+      return 'Loading your liked songs...';
+    }
+
+    const baseText = `${playlist.tracks.total} tracks • ${playlist.owner.display_name}`;
+
+    // Add unheard count if we have progress stats
+    if (progressStats && progressStats.remaining > 0) {
+      return `${playlist.tracks.total} tracks • ${progressStats.remaining} unheard`;
+    }
+
+    return baseText;
+  };
 
   return (
     <Pressable
@@ -57,7 +79,7 @@ function AnimatedPlaylistCard({
       <Animated.View style={[styles.playlistCard, isLoading && styles.playlistCardLoading, animatedStyle]}>
         <View style={styles.playlistImageContainer}>
           <Image
-            source={{ 
+            source={{
               uri: playlist.images?.[0]?.url || 'https://images.pexels.com/photos/1389429/pexels-photo-1389429.jpeg?auto=compress&cs=tinysrgb&w=300&h=300&fit=crop'
             }}
             style={[
@@ -70,16 +92,17 @@ function AnimatedPlaylistCard({
               <ActivityIndicator size="small" color="#1DB954" />
             </View>
           )}
+          {/* Progress indicator overlay */}
+          {!isLoading && (
+            <PlaylistProgressIndicator stats={progressStats ?? null} size={60} strokeWidth={3} />
+          )}
         </View>
         <View style={styles.playlistInfo}>
           <Text style={styles.playlistName} numberOfLines={2}>
             {playlist.name}
           </Text>
           <Text style={styles.playlistMeta}>
-            {isLoading 
-              ? 'Loading your liked songs...' 
-              : `${playlist.tracks.total} tracks • ${playlist.owner.display_name}`
-            }
+            {getMetaText()}
           </Text>
         </View>
         <View style={[
@@ -244,13 +267,12 @@ export default function HomeTab() {
     setAlertModal({ isVisible: false, type: 'generic', pendingPlaylist: null, queueCount: 0 });
   };
 
-    // Automatically trigger login if not authenticated
-    React.useEffect(() => {
-      console.log('[Auth Status]', { isAuthenticated, isLoading });
-      if (!isAuthenticated && !isLoading) {
-        handleLogin();
-      }
-    }, [isAuthenticated, isLoading]);
+  // Automatically trigger login if not authenticated
+  React.useEffect(() => {
+    if (!isAuthenticated && !isLoading) {
+      handleLogin();
+    }
+  }, [isAuthenticated, isLoading]);
 
   if (isLoading) {
     return (

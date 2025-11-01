@@ -1,7 +1,8 @@
 import { useQuery, useMutation, useQueryClient, CancelledError } from '@tanstack/react-query';
 import { SpotifyService } from '@/utils/spotify';
 import type { SpotifyUser, SpotifyPlaylist, SpotifyTrack } from '@/types/spotify';
-import { getSmartShuffledTracks, type ShuffleStats } from '@/utils/smartShuffle';
+import { getSmartShuffledTracks, getPlaylistProgress, type ShuffleStats } from '@/utils/smartShuffle';
+import { getGlobalStats, type GlobalStats } from '@/utils/statistics';
 import {
   showQueueErrorNotification,
   dismissNotification,
@@ -18,6 +19,8 @@ export const spotifyQueryKeys = {
   savedTracks: ['spotify', 'saved-tracks'] as const,
   devices: ['spotify', 'devices'] as const,
   queueStatus: ['spotify', 'queue-status'] as const,
+  playlistProgress: (playlistId: string) => ['spotify', 'playlist', playlistId, 'progress'] as const,
+  globalStats: ['spotify', 'global-stats'] as const,
 };
 
 // User query
@@ -59,7 +62,6 @@ export function useSpotifySavedTracks(enabled: boolean = true) {
       } catch (error: any) {
         // If insufficient scope, return empty array instead of failing
         if (error?.message?.includes('Insufficient client scope')) {
-          console.warn('[useSpotifySavedTracks] Insufficient scope for saved tracks');
           return [];
         }
         // Re-throw other errors
@@ -183,12 +185,10 @@ export function useQueueShuffleMutation() {
           });
         }
       }
-      
+
       if (!tracks || tracks.length === 0) return false;
 
       // Use smart shuffle with memory
-      console.log(`[QueueShuffle] Using smart shuffle for playlist: ${playlist.id}`);
-      
       const { tracks: smartShuffledTracks, stats } = await getSmartShuffledTracks(
         playlist.id,
         tracks
@@ -200,15 +200,6 @@ export function useQueueShuffleMutation() {
       }
 
       const first = smartShuffledTracks[0];
-      const rest = smartShuffledTracks.slice(1);
-      const totalToQueue = rest.length;
-
-      console.log(`[QueueShuffle] Smart Shuffle Stats:`, stats);
-      console.log(`[QueueShuffle] Queueing ${totalToQueue + 1} tracks`);
-      
-      if (stats.cycleComplete) {
-        console.log('✨ [QueueShuffle] Cycle complete! Starting fresh with all songs.');
-      }
 
       // Get Device and Play First Track
       const playlistUri = playlist.id === 'liked-songs' ? 'spotify:collection:tracks' : playlist.uri;
@@ -235,15 +226,62 @@ export function useQueueShuffleMutation() {
 
       return success;
     },
+    onSuccess: async (success, variables) => {
+      if (success) {
+        // Invalidate progress and stats queries to reflect updated state
+        // This ensures UI updates after tracks are marked as played
+        await queryClient.invalidateQueries({
+          queryKey: spotifyQueryKeys.playlistProgress(variables.playlist.id),
+        });
+        await queryClient.invalidateQueries({
+          queryKey: spotifyQueryKeys.globalStats,
+        });
+      }
+    },
     onError: (error) => {
       if (error instanceof CancelledError) {
         console.log('Shuffle was cancelled by React Query.');
         dismissNotification();
         return;
       }
-      
+
       console.error('Queue shuffle failed:', error);
       showQueueErrorNotification(error instanceof Error ? error.message : 'An error occurred');
     },
+  });
+}
+
+// Playlist progress query - tracks how many songs have been heard
+export function usePlaylistProgress(playlistId: string | null, totalTracks: number, enabled: boolean = true, enablePolling: boolean = false) {
+  return useQuery({
+    queryKey: playlistId ? spotifyQueryKeys.playlistProgress(playlistId) : ['spotify', 'playlist', 'none', 'progress'],
+    queryFn: async (): Promise<ShuffleStats | null> => {
+      if (!playlistId || totalTracks === 0) return null;
+      return await getPlaylistProgress(playlistId, totalTracks);
+    },
+    enabled: enabled && !!playlistId && totalTracks > 0,
+    staleTime: 3 * 1000, // 3 seconds - progress updates should be fresh
+    gcTime: 60 * 1000, // 1 minute cache
+    refetchOnMount: true, // Always fetch fresh on mount
+    refetchOnWindowFocus: true, // Refetch when user returns to app
+    refetchInterval: enablePolling ? 3 * 1000 : false, // Optional polling for real-time updates
+    retry: 0, // Don't retry on error (progress is not critical)
+  });
+}
+
+// Global stats query - aggregates statistics across all tracked playlists
+export function useGlobalStats(enabled: boolean = true, enablePolling: boolean = false) {
+  return useQuery({
+    queryKey: spotifyQueryKeys.globalStats,
+    queryFn: async (): Promise<GlobalStats> => {
+      return await getGlobalStats();
+    },
+    enabled,
+    staleTime: 3 * 1000, // 3 seconds - stats should be fresh
+    gcTime: 60 * 1000, // 1 minute cache
+    refetchOnMount: true, // Always fetch fresh when returning to profile
+    refetchOnWindowFocus: true, // Refetch when user returns to app
+    refetchInterval: enablePolling ? 3 * 1000 : false, // Optional polling for real-time updates
+    retry: 0, // Don't retry on error (stats are not critical)
   });
 }

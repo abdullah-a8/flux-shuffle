@@ -231,17 +231,15 @@ function calculateOptimalSetSize(totalTracks: number): number {
  * Load shuffle memory from AsyncStorage
  * Returns null if no memory exists for this playlist
  */
-async function loadShuffleMemory(playlistId: string): Promise<ShuffleMemory | null> {
+export async function loadShuffleMemory(playlistId: string): Promise<ShuffleMemory | null> {
   try {
     const jsonValue = await AsyncStorage.getItem(getStorageKey(playlistId));
-    
+
     if (jsonValue === null) {
       return null;
     }
-    
+
     const memory = JSON.parse(jsonValue) as ShuffleMemory;
-    console.log(`[SmartShuffle] Loaded memory for ${playlistId}: ${memory.playedTrackIds.length}/${memory.totalTracks} played`);
-    
     return memory;
   } catch (error) {
     console.error('[SmartShuffle] Error loading memory:', error);
@@ -256,8 +254,6 @@ async function saveShuffleMemory(memory: ShuffleMemory): Promise<void> {
   try {
     const jsonValue = JSON.stringify(memory);
     await AsyncStorage.setItem(getStorageKey(memory.playlistId), jsonValue);
-    
-    console.log(`[SmartShuffle] Saved memory for ${memory.playlistId}: ${memory.playedTrackIds.length}/${memory.totalTracks} played`);
   } catch (error) {
     console.error('[SmartShuffle] Error saving memory:', error);
   }
@@ -323,9 +319,7 @@ export async function getSmartShuffledTracks(
 
   // Race condition protection: If a shuffle is already in progress for this playlist, wait for it
   if (shuffleLocks.has(playlistId)) {
-    console.log(`[SmartShuffle] Another shuffle operation in progress for ${playlistId}, waiting...`);
     await shuffleLocks.get(playlistId);
-    console.log(`[SmartShuffle] Previous operation completed, proceeding with new shuffle`);
   }
 
   // Create a promise for this operation and store it
@@ -336,14 +330,15 @@ export async function getSmartShuffledTracks(
   shuffleLocks.set(playlistId, lockPromise);
 
   try {
-    console.log(`[SmartShuffle] Starting smart shuffle for ${playlistId} with ${allTracks.length} tracks`);
-
     // Step 1: Load existing memory or create fresh
     let memory = await loadShuffleMemory(playlistId);
-    
+
     if (!memory) {
-      console.log('[SmartShuffle] No existing memory found, creating fresh state');
       memory = createFreshMemory(playlistId, allTracks);
+
+      // ✅ CRITICAL FIX: Save fresh memory immediately to AsyncStorage
+      // Without this, the memory only exists in-memory and is lost when trying to mark tracks
+      await saveShuffleMemory(memory);
     }
 
     // Step 2: Detect playlist changes (songs added/removed)
@@ -351,12 +346,11 @@ export async function getSmartShuffledTracks(
     const playlistChanged = memory.playlistHash !== currentHash;
 
     if (playlistChanged) {
-      console.log('[SmartShuffle] Playlist changed detected (songs added/removed), resetting memory');
-      console.log(`  Old: ${memory.playlistHash}`);
-      console.log(`  New: ${currentHash}`);
-
       // Reset memory but keep cycle number
       memory = createFreshMemory(playlistId, allTracks, memory.cycleNumber);
+
+      // ✅ Save updated memory after playlist change detection
+      await saveShuffleMemory(memory);
     }
 
     // Step 3: Clean up orphaned track IDs (tracks that were removed from playlist)
@@ -365,15 +359,15 @@ export async function getSmartShuffledTracks(
     const orphanedIds = memory.playedTrackIds.filter(id => !currentTrackIds.has(id));
 
     if (orphanedIds.length > 0) {
-      console.log(`[SmartShuffle] Removing ${orphanedIds.length} orphaned track IDs from memory`);
       memory.playedTrackIds = memory.playedTrackIds.filter(id => currentTrackIds.has(id));
+
+      // ✅ Save memory after cleaning orphaned tracks
+      await saveShuffleMemory(memory);
     }
 
     // Step 4: Filter to get unplayed tracks (after orphan cleanup for accurate counts)
     const playedSet = new Set(memory.playedTrackIds);
     const unplayedTracks = allTracks.filter(track => !playedSet.has(track.id));
-
-    console.log(`[SmartShuffle] Unplayed tracks: ${unplayedTracks.length}/${allTracks.length}`);
 
     // Step 5: Check if cycle is complete (all songs have been played)
     if (unplayedTracks.length === 0) {
@@ -400,13 +394,9 @@ export async function getSmartShuffledTracks(
     const setSize = calculateOptimalSetSize(allTracks.length);
     const tracksToReturn = Math.min(setSize, unplayedTracks.length);
 
-    console.log(`[SmartShuffle] Set size: ${setSize}, Will return: ${tracksToReturn} tracks`);
-
     // Step 7: Shuffle unplayed tracks using true random algorithm
     const shuffled = trueRandomShuffle(unplayedTracks);
     const selectedTracks = shuffled.slice(0, tracksToReturn);
-
-    console.log(`[SmartShuffle] Selected ${selectedTracks.length} tracks for queueing`);
 
     // Step 8: Calculate current statistics (BEFORE marking as played)
     // NOTE: Tracks will be marked as played AFTER successful queueing
@@ -418,9 +408,6 @@ export async function getSmartShuffledTracks(
       cycleNumber: memory.cycleNumber,
       percentage: Math.round((memory.playedTrackIds.length / allTracks.length) * 100),
     };
-
-    console.log(`[SmartShuffle] Stats: ${stats.played}/${allTracks.length} played (${stats.percentage}%), Cycle: ${stats.cycleNumber}`);
-    console.log(`[SmartShuffle] ⚠️  Tracks NOT yet marked as played - will be marked after successful queueing`);
 
     return {
       tracks: selectedTracks,
@@ -533,8 +520,6 @@ export async function markTracksAsPlayed(
   trackIds: string[]
 ): Promise<boolean> {
   try {
-    console.log(`[SmartShuffle] Marking ${trackIds.length} tracks as played for ${playlistId}`);
-
     // Load current memory
     const memory = await loadShuffleMemory(playlistId);
 
@@ -553,12 +538,8 @@ export async function markTracksAsPlayed(
 
       // Save updated memory
       await saveShuffleMemory(memory);
-
-      console.log(`[SmartShuffle] ✅ Successfully marked ${newIds.length} tracks as played`);
-      console.log(`[SmartShuffle] Total played: ${memory.playedTrackIds.length}/${memory.totalTracks}`);
       return true;
     } else {
-      console.log(`[SmartShuffle] All ${trackIds.length} tracks were already marked as played`);
       return true;
     }
   } catch (error) {
@@ -580,8 +561,6 @@ export async function rollbackUnqueuedTracks(
   trackIds: string[]
 ): Promise<boolean> {
   try {
-    console.log(`[SmartShuffle] Rolling back ${trackIds.length} unqueued tracks for ${playlistId}`);
-
     // Load current memory
     const memory = await loadShuffleMemory(playlistId);
 
@@ -601,12 +580,8 @@ export async function rollbackUnqueuedTracks(
 
       // Save updated memory
       await saveShuffleMemory(memory);
-
-      console.log(`[SmartShuffle] ✅ Successfully rolled back ${removedCount} tracks`);
-      console.log(`[SmartShuffle] Total played: ${memory.playedTrackIds.length}/${memory.totalTracks}`);
       return true;
     } else {
-      console.log(`[SmartShuffle] No tracks needed rollback`);
       return true;
     }
   } catch (error) {

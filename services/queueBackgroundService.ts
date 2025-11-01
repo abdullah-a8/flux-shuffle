@@ -38,7 +38,8 @@ const STORAGE_KEY_STATE = `${STORAGE_KEY_PREFIX}state`;
 interface QueueTaskState {
   playlistId: string;
   playlistName: string;
-  tracks: string[]; // Track URIs
+  tracks: string[]; // Track URIs (queued tracks only, excludes first track)
+  firstTrackUri: string; // First track that was played immediately
   deviceId: string;
   currentIndex: number;
   totalTracks: number;
@@ -95,7 +96,6 @@ TaskManager.defineTask(QUEUE_BACKGROUND_TASK, async ({ data, error }) => {
 async function saveQueueState(state: QueueTaskState): Promise<void> {
   try {
     await AsyncStorage.setItem(STORAGE_KEY_STATE, JSON.stringify(state));
-    console.log(`[QueueBackgroundService] State saved: ${state.currentIndex}/${state.totalTracks}`);
   } catch (error) {
     console.error('[QueueBackgroundService] Error saving state:', error);
   }
@@ -110,7 +110,6 @@ async function loadQueueState(): Promise<QueueTaskState | null> {
     if (!stateJson) return null;
 
     const state = JSON.parse(stateJson) as QueueTaskState;
-    console.log(`[QueueBackgroundService] State loaded: ${state.currentIndex}/${state.totalTracks}`);
     return state;
   } catch (error) {
     console.error('[QueueBackgroundService] Error loading state:', error);
@@ -124,7 +123,6 @@ async function loadQueueState(): Promise<QueueTaskState | null> {
 async function clearQueueState(): Promise<void> {
   try {
     await AsyncStorage.removeItem(STORAGE_KEY_STATE);
-    console.log('[QueueBackgroundService] State cleared');
   } catch (error) {
     console.error('[QueueBackgroundService] Error clearing state:', error);
   }
@@ -149,8 +147,6 @@ async function clearQueueState(): Promise<void> {
 async function processQueue(state: QueueTaskState): Promise<void> {
   const { tracks, deviceId, currentIndex, totalTracks, playlistName } = state;
 
-  console.log(`[QueueBackgroundService] Processing queue from index ${currentIndex}`);
-
   let lastUpdateTime = Date.now();
   let lastUpdateIndex = currentIndex;
 
@@ -161,8 +157,6 @@ async function processQueue(state: QueueTaskState): Promise<void> {
     try {
       // ✅ Device Health Check: Verify device is still available every 25 tracks
       if (i > 0 && i % 25 === 0) {
-        console.log(`[QueueBackgroundService] Checking device health at track ${i + 1}/${totalTracks}`);
-
         const deviceHealthy = await SpotifyService.verifyDeviceHealth(deviceId);
 
         if (!deviceHealthy) {
@@ -171,8 +165,6 @@ async function processQueue(state: QueueTaskState): Promise<void> {
           await handleTaskError(state, errorMsg);
           return;
         }
-
-        console.log(`[QueueBackgroundService] Device health check passed ✅`);
       }
       // Queue the track with retry logic
       await queueTrackWithRetry(trackUri, deviceId);
@@ -192,16 +184,11 @@ async function processQueue(state: QueueTaskState): Promise<void> {
         await updateQueueProgressNotification(i + 1, totalTracks, playlistName);
         lastUpdateTime = Date.now();
         lastUpdateIndex = i + 1;
-        console.log(`[QueueBackgroundService] Progress update: ${i + 1}/${totalTracks} (${Math.round(((i + 1) / totalTracks) * 100)}%)`);
       }
 
       // Respect API rate limits - 150ms between requests
       if (i < tracks.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 150));
-      }
-
-      if ((i + 1) % 20 === 0 || isComplete) {
-        console.log(`[QueueBackgroundService] Queued ${i + 1}/${totalTracks} tracks`);
       }
     } catch (error) {
       console.error(`[QueueBackgroundService] Error queueing track ${i + 1}:`, error);
@@ -253,17 +240,24 @@ async function queueTrackWithRetry(
  * Handle task completion
  */
 async function handleTaskComplete(state: QueueTaskState): Promise<void> {
-  console.log('[QueueBackgroundService] Queue completed successfully');
-
   try {
     // ✅ CRITICAL: Mark all tracks as played in shuffle memory
-    // This happens ONLY after ALL tracks have been successfully queued
-    const trackIds = state.tracks.map(uri => {
+    // This includes BOTH the first track (played immediately) AND all queued tracks
+
+    // Extract track IDs from queued tracks
+    const queuedTrackIds = state.tracks.map(uri => {
       const parts = uri.split(':');
-      return parts[parts.length - 1]; // Extract track ID from URI
+      return parts[parts.length - 1];
     });
 
-    const marked = await markTracksAsPlayed(state.playlistId, trackIds);
+    // Extract track ID from first track
+    const firstTrackParts = state.firstTrackUri.split(':');
+    const firstTrackId = firstTrackParts[firstTrackParts.length - 1];
+
+    // Combine: first track + all queued tracks
+    const allTrackIds = [firstTrackId, ...queuedTrackIds];
+
+    const marked = await markTracksAsPlayed(state.playlistId, allTrackIds);
 
     if (!marked) {
       console.error('[QueueBackgroundService] Failed to mark tracks as played - data integrity issue!');
@@ -294,8 +288,6 @@ async function handleTaskError(state: QueueTaskState | null, errorMessage: strin
   // ✅ CRITICAL: Rollback unqueued tracks from shuffle memory
   if (state && state.currentIndex < state.tracks.length) {
     try {
-      console.log(`[QueueBackgroundService] Rolling back ${state.tracks.length - state.currentIndex} unqueued tracks`);
-
       // Calculate which tracks were NOT queued
       const unqueuedTracks = state.tracks.slice(state.currentIndex);
       const unqueuedTrackIds = unqueuedTracks.map(uri => {
@@ -306,10 +298,8 @@ async function handleTaskError(state: QueueTaskState | null, errorMessage: strin
       // Rollback these tracks from shuffle memory
       const rolledBack = await rollbackUnqueuedTracks(state.playlistId, unqueuedTrackIds);
 
-      if (rolledBack) {
-        console.log(`[QueueBackgroundService] ✅ Successfully rolled back ${unqueuedTrackIds.length} tracks`);
-      } else {
-        console.error('[QueueBackgroundService] ❌ Failed to rollback tracks - data integrity issue!');
+      if (!rolledBack) {
+        console.error('[QueueBackgroundService] Failed to rollback tracks - data integrity issue!');
       }
     } catch (error) {
       console.error('[QueueBackgroundService] Error during rollback:', error);
@@ -348,9 +338,6 @@ export async function startBackgroundQueue(params: {
     const tracksToQueue = tracks.slice(1);
     const trackUris = tracksToQueue.map(t => t.uri);
 
-    console.log(`[QueueBackgroundService] Starting background queue for ${playlistName}`);
-    console.log(`[QueueBackgroundService] Total tracks to queue: ${trackUris.length}`);
-
     // ✅ CRITICAL: Validate all track URIs before queueing
     const validation = validateTrackUris(trackUris);
 
@@ -369,10 +356,8 @@ export async function startBackgroundQueue(params: {
       }
 
       console.warn(
-        `[QueueBackgroundService] ⚠️  Proceeding with ${validation.validUris.length} valid URIs, skipping ${validation.invalidCount} invalid ones`
+        `[QueueBackgroundService] Proceeding with ${validation.validUris.length} valid URIs, skipping ${validation.invalidCount} invalid ones`
       );
-    } else {
-      console.log(`[QueueBackgroundService] ✅ All ${trackUris.length} URIs validated successfully`);
     }
 
     // Use only validated URIs for queueing
@@ -383,6 +368,7 @@ export async function startBackgroundQueue(params: {
       playlistId,
       playlistName,
       tracks: validatedTrackUris, // ✅ Use validated URIs instead of raw trackUris
+      firstTrackUri, // ✅ Store first track to mark it as played later
       deviceId,
       currentIndex: 0,
       totalTracks: validatedTrackUris.length, // ✅ Use validated count

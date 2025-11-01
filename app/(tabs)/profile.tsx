@@ -2,11 +2,17 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable, Image, ScrollView } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { useSpotify } from '@/contexts/SpotifyContext';
+import { useGlobalStats } from '@/hooks/useSpotifyQueries';
 import { LogOut, Mail, Crown } from 'lucide-react-native';
+import StatsCard from '@/components/StatsCard';
 
 export default function ProfileTab() {
   const { user, logout } = useSpotify();
+  // Fetch stats when tab is focused, but don't poll continuously to avoid performance issues
+  // Stats will update automatically when cache is invalidated after queueing completes
+  const { data: globalStats, isLoading: statsLoading } = useGlobalStats(!!user, false);
   const scale = useSharedValue(1);
+
 
   const animatedStyle = useAnimatedStyle(() => {
     return {
@@ -84,6 +90,9 @@ export default function ProfileTab() {
                 </View>
               </View>
             </View>
+
+            {/* Listening Statistics Card */}
+            <StatsCard stats={globalStats} isLoading={statsLoading} />
           </>
         )}
       </ScrollView>
@@ -192,6 +201,7 @@ const styles = StyleSheet.create({
   infoCard: {
     backgroundColor: '#0a0a0a',
     marginHorizontal: 24,
+    marginBottom: 20,
     paddingVertical: 20,
     paddingHorizontal: 20,
     borderRadius: 20,

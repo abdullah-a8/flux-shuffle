@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import * as WebBrowser from 'expo-web-browser';
 import { View, Text, ActivityIndicator } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSpotify } from '@/contexts/SpotifyContext';

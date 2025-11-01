@@ -411,9 +411,6 @@ export async function getPlaylistTracks(playlistId: string): Promise<SpotifyTrac
     const remainingPages = Math.ceil(remainingTracks / limit);
     
     // Only use batching for large playlists (more than 200 tracks)
-    if (totalTracks > 200) {
-      console.log(`[SpotifyService] Fetching ${totalTracks} playlist tracks in ${remainingPages + 1} total pages (${CONCURRENT_REQUESTS} concurrent)`);
-    }
     
     // Create batches of concurrent requests
     for (let i = 0; i < remainingPages; i += CONCURRENT_REQUESTS) {
@@ -490,8 +487,6 @@ export async function getUserSavedTracks(): Promise<SpotifyTrack[]> {
     const remainingTracks = totalTracks - limit;
     const remainingPages = Math.ceil(remainingTracks / limit);
     
-    console.log(`[SpotifyService] Fetching ${totalTracks} saved tracks in ${remainingPages + 1} total pages (${CONCURRENT_REQUESTS} concurrent)`);
-    
     // Create batches of concurrent requests
     const allPromises: Promise<SpotifyTrack[]>[] = [];
     
@@ -535,7 +530,6 @@ export async function getUserSavedTracks(): Promise<SpotifyTrack[]> {
       }
     }
 
-    console.log(`[SpotifyService] Successfully fetched ${tracks.length} saved tracks`);
     return tracks;
     
   } catch (error: any) {
@@ -659,18 +653,14 @@ export async function ensureActiveDevice(trackUri?: string, playlistUri?: string
       devices = await getDevices();
       if (devices && devices.length > 0) {
         const active = devices.find(d => d.is_active) || devices[0];
-        console.log(`[SpotifyService] Found device after ${i + 1} attempt(s):`, active?.name);
         return active?.id;
       }
-      
+
       // Wait before next retry (1s, 2s, 3s)
       if (i < 2) {
-        console.log(`[SpotifyService] No device found, retrying in ${i + 1}s...`);
         await new Promise(resolve => setTimeout(resolve, (i + 1) * 1000));
       }
     }
-    
-    console.log('[SpotifyService] No device found after 3 attempts');
   } catch (error) {
     console.error('[SpotifyService] ensureActiveDevice error ->', error);
   }
@@ -763,7 +753,6 @@ export async function getUserQueue(): Promise<any | null> {
 export async function hasActiveDevice(): Promise<boolean> {
   try {
     const devices = await getDevices();
-    console.log('[SpotifyService] devices ->', devices);
     return devices ? devices.some(device => device.is_active) || devices.length > 0 : false;
   } catch (error) {
     console.error('[SpotifyService] Error checking active device:', error);
@@ -797,7 +786,6 @@ export async function verifyDeviceHealth(deviceId: string): Promise<boolean> {
 
     // Device exists in the list, which means it's available
     // We don't require it to be active since Spotify API can transfer playback
-    console.log(`[SpotifyService] Device ${deviceId} health check: ✅ ${targetDevice.name} (active: ${targetDevice.is_active})`);
     return true;
   } catch (error) {
     console.error('[SpotifyService] Error verifying device health:', error);
@@ -811,14 +799,7 @@ export async function hasQueuedSongs(): Promise<{ hasQueue: boolean; queueCount:
   try {
     const queueData = await getUserQueue();
     const queueCount = queueData?.queue?.length || 0;
-    console.log('[SpotifyService] queueData ->', queueData);
-    console.log('[SpotifyService] queueCount ->', queueCount);
-    
-    // Log for debugging - can be removed later
-    if (queueCount > 0) {
-      console.log(`[SpotifyService] Found ${queueCount} songs in queue`);
-    }
-    
+
     return {
       hasQueue: queueCount > 0,
       queueCount
@@ -859,51 +840,54 @@ export const SpotifyService = {
 
 // Generate cryptographically secure random number between 0 and 1
 function getSecureRandom(): number {
+  try {
+    // React Native/Expo environment - use expo-crypto (works on iOS/Android/Web)
+    // expo-crypto.getRandomBytes is synchronous and generates cryptographically secure random bytes
+    if (Crypto && Crypto.getRandomBytes) {
+      const randomBytes = Crypto.getRandomBytes(4);
+      // Convert 4 bytes to a 32-bit unsigned integer
+      const value = (randomBytes[0] << 24) | (randomBytes[1] << 16) | (randomBytes[2] << 8) | randomBytes[3];
+      // Convert to unsigned 32-bit and normalize to 0-1
+      return (value >>> 0) / (0xffffffff + 1);
+    }
+  } catch (error) {
+    // expo-crypto not available or failed, continue to fallback
+  }
+
+  // Browser environment fallback - use Web Crypto API
   if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
-    // Browser environment with Web Crypto API
     const array = new Uint32Array(1);
     window.crypto.getRandomValues(array);
     return array[0] / (0xffffffff + 1);
-  } else if (typeof require !== 'undefined') {
-    // Node.js environment
-    try {
-      const crypto = require('crypto');
-      const buffer = crypto.randomBytes(4);
-      return buffer.readUInt32BE(0) / (0xffffffff + 1);
-    } catch (error) {
-      console.warn('[trueRandomShuffle] Node crypto not available, falling back to Math.random()');
-    }
   }
-  
-  // Fallback to Math.random() with additional entropy from timestamp
+
+  // Last resort fallback to Math.random() with additional entropy
+  // This should rarely be reached with expo-crypto available
+  console.warn('[trueRandomShuffle] Using Math.random() fallback - crypto not available');
   const timestamp = Date.now();
   const performance_now = typeof performance !== 'undefined' ? performance.now() : 0;
   const seed = (timestamp * 1000 + performance_now) % 1000000;
-  
+
   // Simple linear congruential generator for additional entropy
   const a = 1664525;
   const c = 1013904223;
   const m = Math.pow(2, 32);
   const seededValue = (a * seed + c) % m;
-  
+
   return (Math.random() + seededValue / m) % 1;
 }
 
 // True random shuffle using Fisher-Yates algorithm with crypto-secure randomness
 export function trueRandomShuffle<T>(array: T[]): T[] {
   const shuffled = [...array];
-  
-  // Add additional entropy by incorporating current timestamp
-  const entropy = Date.now() + (typeof performance !== 'undefined' ? performance.now() : 0);
-  console.log(`[trueRandomShuffle] Shuffling ${array.length} items with entropy: ${entropy}`);
-  
+
   for (let i = shuffled.length - 1; i > 0; i--) {
     // Use crypto-secure random number generation
     const randomValue = getSecureRandom();
     const j = Math.floor(randomValue * (i + 1));
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-  
+
   return shuffled;
 }
 
