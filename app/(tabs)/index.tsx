@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useSpotify } from '@/contexts/SpotifyContext';
 import { useQueueShuffleMutation, useSpotifyDevices, usePlaylistProgress, useActiveQueuePlaylistId } from '@/hooks/useSpotifyQueries';
 import { Music, Play, AlertCircle } from 'lucide-react-native';
@@ -338,14 +337,10 @@ export default function HomeTab() {
     <View style={styles.container}>
       <ScrollView style={styles.container}>
         <View style={styles.headerContainer}>
-          <LinearGradient
-            colors={['#1a1a1a', '#0d0d0d', '#000000']}
-            locations={[0, 0.5, 1]}
-            style={styles.gradientHeader}
-          >
+          <View style={styles.header}>
             <Text style={styles.greetingText}>{getTimeBasedGreeting()}, {user?.display_name}</Text>
             <Text style={styles.headerSubtext}>Choose a playlist to shuffle</Text>
-          </LinearGradient>
+          </View>
         </View>
 
         {/* Re-authentication banner */}
@@ -426,9 +421,9 @@ const styles = StyleSheet.create({
   headerContainer: {
     overflow: 'hidden',
   },
-  gradientHeader: {
+  header: {
     padding: 20,
-    paddingTop: 60,
+    paddingTop: 75,
     paddingBottom: 28,
   },
   greetingText: {
@@ -453,10 +448,6 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
     lineHeight: 34,
     marginBottom: 12,
-  },
-  header: {
-    padding: 20,
-    paddingTop: 60,
   },
   title: {
     fontSize: 32,
