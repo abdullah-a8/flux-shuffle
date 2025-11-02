@@ -279,7 +279,7 @@ function createFreshMemory(playlistId: string, tracks: SpotifyTrack[], cycleNumb
 
 /**
  * Get smartly shuffled tracks with memory
- * 
+ *
  * This is the main function that orchestrates the smart shuffle logic:
  * 1. Loads existing memory (or creates new)
  * 2. Detects playlist changes
@@ -288,21 +288,23 @@ function createFreshMemory(playlistId: string, tracks: SpotifyTrack[], cycleNumb
  * 5. Shuffles unplayed tracks
  * 6. Returns optimal set size
  * 7. Saves updated memory
- * 
+ *
  * @param playlistId - Unique identifier for the playlist
  * @param allTracks - All tracks in the playlist
+ * @param _skipLock - Internal parameter to skip lock checking during recursion (prevents deadlock)
  * @returns Promise with shuffled tracks and statistics
  */
 export async function getSmartShuffledTracks(
   playlistId: string,
-  allTracks: SpotifyTrack[]
+  allTracks: SpotifyTrack[],
+  _skipLock: boolean = false
 ): Promise<SmartShuffleResult> {
-  
+
   // Validate input
   if (!playlistId) {
     throw new Error('[SmartShuffle] playlistId is required');
   }
-  
+
   if (!allTracks || allTracks.length === 0) {
     console.warn('[SmartShuffle] No tracks provided');
     return {
@@ -318,16 +320,20 @@ export async function getSmartShuffledTracks(
   }
 
   // Race condition protection: If a shuffle is already in progress for this playlist, wait for it
-  if (shuffleLocks.has(playlistId)) {
+  // Skip lock checking when called recursively to prevent deadlock
+  if (!_skipLock && shuffleLocks.has(playlistId)) {
     await shuffleLocks.get(playlistId);
   }
 
   // Create a promise for this operation and store it
-  let releaseLock: () => void;
-  const lockPromise = new Promise<void>((resolve) => {
-    releaseLock = resolve;
-  });
-  shuffleLocks.set(playlistId, lockPromise);
+  // Only set lock for external calls, not recursive calls
+  let releaseLock: (() => void) | undefined;
+  if (!_skipLock) {
+    const lockPromise = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    shuffleLocks.set(playlistId, lockPromise);
+  }
 
   try {
     // Step 1: Load existing memory or create fresh
@@ -382,7 +388,8 @@ export async function getSmartShuffledTracks(
       await saveShuffleMemory(memory);
 
       // Recurse with fresh state to get tracks for new cycle
-      const result = await getSmartShuffledTracks(playlistId, allTracks);
+      // Pass _skipLock=true to prevent deadlock (we already hold the lock)
+      const result = await getSmartShuffledTracks(playlistId, allTracks, true);
 
       // Mark that cycle was just completed
       result.stats.cycleComplete = true;
@@ -414,11 +421,13 @@ export async function getSmartShuffledTracks(
       stats,
     };
   } finally {
-    // Release the lock for this playlist
+    // Release the lock for this playlist (only if we set it)
     // IMPORTANT: Signal completion first, then remove from map
     // This ensures waiting operations see the resolved promise
-    releaseLock!();
-    shuffleLocks.delete(playlistId);
+    if (releaseLock) {
+      releaseLock();
+      shuffleLocks.delete(playlistId);
+    }
   }
 }
 

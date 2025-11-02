@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { useSpotify } from '@/contexts/SpotifyContext';
-import { useQueueShuffleMutation, useSpotifyDevices, usePlaylistProgress } from '@/hooks/useSpotifyQueries';
+import { useQueueShuffleMutation, useSpotifyDevices, usePlaylistProgress, useActiveQueuePlaylistId } from '@/hooks/useSpotifyQueries';
 import { Music, Play, AlertCircle } from 'lucide-react-native';
 import AlertModal from '@/components/AlertModal';
 import PlaylistProgressIndicator from '@/components/PlaylistProgressIndicator';
 import { hasQueuedSongs, openSpotifyApp } from '@/utils/spotify';
 import { initializeNotifications } from '@/utils/notificationService';
 import { addRecentPlaylist } from '@/utils/recentPlaylists';
+import { isQueueActive } from '@/services/queueBackgroundService';
 import type { SpotifyPlaylist } from '@/types/spotify';
 
 // Animated Playlist Card Component
@@ -16,11 +17,13 @@ function AnimatedPlaylistCard({
   playlist,
   isLoading,
   isDisabled,
+  isQueueing,
   onPress
 }: {
   playlist: SpotifyPlaylist;
   isLoading: boolean;
   isDisabled: boolean;
+  isQueueing: boolean;
   onPress: () => void;
 }) {
   const scale = useSharedValue(1);
@@ -30,7 +33,7 @@ function AnimatedPlaylistCard({
   const { data: progressStats } = usePlaylistProgress(
     playlist.id,
     playlist.tracks.total,
-    !isLoading && !isDisabled
+    !isLoading && !isDisabled && !isQueueing
   );
 
   const animatedStyle = useAnimatedStyle(() => {
@@ -59,6 +62,10 @@ function AnimatedPlaylistCard({
       return 'Loading your liked songs...';
     }
 
+    if (isQueueing) {
+      return 'Queueing tracks...';
+    }
+
     const baseText = `${playlist.tracks.total} tracks • ${playlist.owner.display_name}`;
 
     // Add unheard count if we have progress stats
@@ -76,7 +83,11 @@ function AnimatedPlaylistCard({
       onPressOut={handlePressOut}
       disabled={isDisabled}
     >
-      <Animated.View style={[styles.playlistCard, isLoading && styles.playlistCardLoading, animatedStyle]}>
+      <Animated.View style={[
+        styles.playlistCard,
+        (isLoading || isQueueing) && styles.playlistCardLoading,
+        animatedStyle
+      ]}>
         <View style={styles.playlistImageContainer}>
           <Image
             source={{
@@ -84,16 +95,16 @@ function AnimatedPlaylistCard({
             }}
             style={[
               styles.playlistImage,
-              isLoading && styles.playlistImageLoading
+              (isLoading || isQueueing) && styles.playlistImageLoading
             ]}
           />
-          {isLoading && (
+          {(isLoading || isQueueing) && (
             <View style={styles.playlistLoadingOverlay}>
               <ActivityIndicator size="small" color="#1DB954" />
             </View>
           )}
           {/* Progress indicator overlay */}
-          {!isLoading && (
+          {!isLoading && !isQueueing && (
             <PlaylistProgressIndicator stats={progressStats ?? null} size={60} strokeWidth={3} />
           )}
         </View>
@@ -107,10 +118,10 @@ function AnimatedPlaylistCard({
         </View>
         <View style={[
           styles.playButton,
-          isLoading && styles.playButtonDisabled
+          (isLoading || isQueueing) && styles.playButtonDisabled
         ]}>
-          {isLoading ? (
-            <ActivityIndicator size="small" color="#666" />
+          {isLoading || isQueueing ? (
+            <ActivityIndicator size="small" color="#1DB954" />
           ) : (
             <Play size={20} color="#000" fill="#1DB954" />
           )}
@@ -121,10 +132,10 @@ function AnimatedPlaylistCard({
 }
 
 export default function HomeTab() {
-  const { 
-    isAuthenticated, 
-    isLoading, 
-    user, 
+  const {
+    isAuthenticated,
+    isLoading,
+    user,
     allPlaylistsWithLiked,
     playlistsLoading,
     savedTracksLoading,
@@ -146,6 +157,9 @@ export default function HomeTab() {
   // Device query with caching
   const { data: devices = [], refetch: refetchDevices } = useSpotifyDevices(isAuthenticated);
 
+  // Active queue playlist ID for showing loading state
+  const { data: activeQueuePlaylistId } = useActiveQueuePlaylistId();
+
   // Initialize notifications on mount
   useEffect(() => {
     initializeNotifications().then(hasPermission => {
@@ -161,6 +175,13 @@ export default function HomeTab() {
 
   const handlePlaylistSelect = async (playlist: SpotifyPlaylist) => {
     try {
+      // ✅ Check if a queue is already processing
+      const queueIsActive = await isQueueActive();
+      if (queueIsActive) {
+        console.log('[HomeTab] Queue already active, ignoring playlist selection');
+        return;
+      }
+
       // Check for active device using cached devices
       const hasDevice = devices && devices.length > 0;
       if (!hasDevice) {
@@ -338,13 +359,15 @@ export default function HomeTab() {
             {allPlaylistsWithLiked.map((playlist) => {
               const isLikedSongs = playlist.id === 'liked-songs';
               const isLikedSongsLoading = isLikedSongs && savedTracksLoading;
-              
+              const isThisPlaylistQueueing = activeQueuePlaylistId === playlist.id;
+
               return (
                 <AnimatedPlaylistCard
                   key={playlist.id}
                   playlist={playlist}
                   isLoading={isLikedSongsLoading}
-                  isDisabled={isPending || isLikedSongsLoading}
+                  isDisabled={isPending || isLikedSongsLoading || !!activeQueuePlaylistId}
+                  isQueueing={isThisPlaylistQueueing}
                   onPress={() => handlePlaylistSelect(playlist)}
                 />
               );
@@ -493,7 +516,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   playButtonDisabled: {
-    backgroundColor: '#333',
+    backgroundColor: 'rgba(29, 185, 84, 0.3)', // Dimmed Spotify green for cohesive look
   },
   reauthBanner: {
     flexDirection: 'row',

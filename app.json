@@ -78,7 +78,8 @@
           "defaultChannel": "default"
         }
       ],
-      "./plugins/withAndroidNotifications.js"
+      "./plugins/withAndroidNotifications.js",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

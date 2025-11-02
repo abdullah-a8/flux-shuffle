@@ -160,7 +160,7 @@ export default function StatsCard({ stats, isLoading }: StatsCardProps) {
       <View style={styles.statsContainer}>
         <StatRow
           icon={Music}
-          label="Songs Heard"
+          label="Total Plays"
           value={stats.totalHeard.toLocaleString()}
           delay={0}
         />

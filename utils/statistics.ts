@@ -62,7 +62,7 @@ export async function getGlobalStats(): Promise<GlobalStats> {
     // Aggregate stats from all playlists
     let totalHeard = 0;
     let totalCycles = 0;
-    let mostPlayed: { playlistId: string; cycleNumber: number; played: number } | null = null;
+    let mostPlayed: { playlistId: string; cycleNumber: number; played: number; lifetimePlays: number } | null = null;
 
     // Fetch progress for each playlist and aggregate
     // Use getPlaylistProgress which correctly handles totalTracks
@@ -71,41 +71,39 @@ export async function getGlobalStats(): Promise<GlobalStats> {
         // Load memory to get totalTracks
         const memory = await loadShuffleMemory(playlistId);
         if (!memory) {
-          return { playlistId, progress: null };
+          return { playlistId, progress: null, totalTracks: 0 };
         }
 
         // Use the standard getPlaylistProgress function for consistency
         const progress = await getPlaylistProgress(playlistId, memory.totalTracks);
 
-        return { playlistId, progress };
+        return { playlistId, progress, totalTracks: memory.totalTracks };
       } catch (error) {
         console.warn(`[Statistics] Failed to get progress for ${playlistId}:`, error);
-        return { playlistId, progress: null };
+        return { playlistId, progress: null, totalTracks: 0 };
       }
     });
 
     const results = await Promise.all(progressPromises);
 
     // Aggregate data
-    for (const { playlistId, progress } of results) {
+    for (const { playlistId, progress, totalTracks } of results) {
       if (!progress) continue;
 
-      totalHeard += progress.played;
+      // Calculate lifetime plays: (completed cycles × total tracks) + current cycle progress
+      // Example: Cycle 1, 105/210 played = (1 × 210) + 105 = 315 total
+      const lifetimePlays = (progress.cycleNumber * totalTracks) + progress.played;
+
+      totalHeard += lifetimePlays;
       totalCycles += progress.cycleNumber;
 
-      // Track most played (highest cycle number, or most played in current cycle)
-      if (!mostPlayed || progress.cycleNumber > mostPlayed.cycleNumber) {
+      // Track most played (highest lifetime plays)
+      if (!mostPlayed || lifetimePlays > mostPlayed.lifetimePlays) {
         mostPlayed = {
           playlistId,
           cycleNumber: progress.cycleNumber,
           played: progress.played,
-        };
-      } else if (progress.cycleNumber === mostPlayed.cycleNumber && progress.played > mostPlayed.played) {
-        // If same cycle number, use the one with more plays in current cycle
-        mostPlayed = {
-          playlistId,
-          cycleNumber: progress.cycleNumber,
-          played: progress.played,
+          lifetimePlays,
         };
       }
     }
@@ -114,7 +112,11 @@ export async function getGlobalStats(): Promise<GlobalStats> {
       totalHeard,
       playlistCount: playlistIds.length,
       totalCycles,
-      mostPlayed,
+      mostPlayed: mostPlayed ? {
+        playlistId: mostPlayed.playlistId,
+        cycleNumber: mostPlayed.cycleNumber,
+        played: mostPlayed.played,
+      } : null,
     };
   } catch (error) {
     console.error('[Statistics] Error getting global stats:', error);

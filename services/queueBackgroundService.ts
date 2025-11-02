@@ -22,6 +22,8 @@ import {
   dismissNotification,
 } from '@/utils/notificationService';
 import { markTracksAsPlayed, rollbackUnqueuedTracks, validateTrackUris } from '@/utils/smartShuffle';
+import { queryClient } from '@/utils/queryClient';
+import { spotifyQueryKeys } from '@/hooks/useSpotifyQueries';
 
 // ============================================================================
 // Constants
@@ -155,8 +157,16 @@ async function processQueue(state: QueueTaskState): Promise<void> {
     const trackUri = tracks[i];
 
     try {
-      // ✅ Device Health Check: Verify device is still available every 25 tracks
+      // ✅ Safety Check: Verify state still exists (not cleared by stale cleanup)
+      // Check every 25 tracks to avoid excessive AsyncStorage reads
       if (i > 0 && i % 25 === 0) {
+        const currentState = await loadQueueState();
+        if (!currentState || !currentState.isActive) {
+          console.warn('[QueueBackgroundService] Queue state was cleared externally. Stopping processing.');
+          return; // Exit gracefully without error notification
+        }
+
+        // Device Health Check: Verify device is still available
         const deviceHealthy = await SpotifyService.verifyDeviceHealth(deviceId);
 
         if (!deviceHealthy) {
@@ -238,10 +248,18 @@ async function queueTrackWithRetry(
 
 /**
  * Handle task completion
+ *
+ * Critical Flow:
+ * 1. Mark tracks as played in AsyncStorage (data persistence)
+ * 2. Invalidate React Query cache (UI update trigger)
+ * 3. Show completion notification
+ * 4. Clear queue state
+ *
+ * This order ensures data integrity and proper UI updates.
  */
 async function handleTaskComplete(state: QueueTaskState): Promise<void> {
   try {
-    // ✅ CRITICAL: Mark all tracks as played in shuffle memory
+    // ✅ STEP 1: Mark all tracks as played in shuffle memory (AsyncStorage)
     // This includes BOTH the first track (played immediately) AND all queued tracks
 
     // Extract track IDs from queued tracks
@@ -257,35 +275,75 @@ async function handleTaskComplete(state: QueueTaskState): Promise<void> {
     // Combine: first track + all queued tracks
     const allTrackIds = [firstTrackId, ...queuedTrackIds];
 
+    console.log(`[QueueBackgroundService] Marking ${allTrackIds.length} tracks as played for playlist ${state.playlistId}`);
     const marked = await markTracksAsPlayed(state.playlistId, allTrackIds);
 
     if (!marked) {
       console.error('[QueueBackgroundService] Failed to mark tracks as played - data integrity issue!');
       // Continue with completion despite this error
     }
+
+    // ✅ STEP 2: Invalidate React Query cache AFTER AsyncStorage updates
+    // This ensures UI refetches fresh data with updated play counts
+    console.log('[QueueBackgroundService] Invalidating React Query cache to trigger UI updates');
+
+    try {
+      // Invalidate playlist-specific progress query
+      await queryClient.invalidateQueries({
+        queryKey: spotifyQueryKeys.playlistProgress(state.playlistId),
+        refetchType: 'active', // Only refetch if component is mounted
+      });
+
+      // Invalidate global stats query (for profile page)
+      await queryClient.invalidateQueries({
+        queryKey: spotifyQueryKeys.globalStats,
+        refetchType: 'active', // Only refetch if component is mounted
+      });
+
+      // Invalidate active queue query to remove loading spinner immediately
+      await queryClient.invalidateQueries({
+        queryKey: spotifyQueryKeys.activeQueuePlaylistId,
+        refetchType: 'active',
+      });
+
+      console.log('[QueueBackgroundService] ✅ Cache invalidation complete - UI will update');
+    } catch (invalidationError) {
+      console.error('[QueueBackgroundService] Error invalidating queries:', invalidationError);
+      // Continue despite invalidation error - data is already saved
+    }
   } catch (error) {
-    console.error('[QueueBackgroundService] Error marking tracks as played:', error);
-    // Continue with completion despite this error
+    console.error('[QueueBackgroundService] Error in task completion:', error);
+    // Continue with completion despite errors
   }
 
-  // Show completion notification
+  // ✅ STEP 3: Show completion notification
   await showQueueCompleteNotification(
     state.totalTracks,
     state.playlistName,
     state.stats?.remaining
   );
 
-  // Clear state
+  // ✅ STEP 4: Clear queue state
   await clearQueueState();
+
+  console.log('[QueueBackgroundService] ✅ Queue processing complete');
 }
 
 /**
  * Handle task error with rollback support
+ *
+ * Error Recovery Flow:
+ * 1. Rollback unqueued tracks from shuffle memory (data consistency)
+ * 2. Invalidate queries to ensure UI shows accurate state
+ * 3. Show error notification to user
+ * 4. Clear queue state
+ *
+ * This ensures the app remains in a consistent state even after errors.
  */
 async function handleTaskError(state: QueueTaskState | null, errorMessage: string): Promise<void> {
   console.error('[QueueBackgroundService] Task failed:', errorMessage);
 
-  // ✅ CRITICAL: Rollback unqueued tracks from shuffle memory
+  // ✅ STEP 1: Rollback unqueued tracks from shuffle memory
   if (state && state.currentIndex < state.tracks.length) {
     try {
       // Calculate which tracks were NOT queued
@@ -295,22 +353,44 @@ async function handleTaskError(state: QueueTaskState | null, errorMessage: strin
         return parts[parts.length - 1]; // Extract track ID from URI
       });
 
-      // Rollback these tracks from shuffle memory
+      console.log(`[QueueBackgroundService] Rolling back ${unqueuedTrackIds.length} unqueued tracks`);
       const rolledBack = await rollbackUnqueuedTracks(state.playlistId, unqueuedTrackIds);
 
       if (!rolledBack) {
         console.error('[QueueBackgroundService] Failed to rollback tracks - data integrity issue!');
+      }
+
+      // ✅ STEP 2: Invalidate queries after rollback to show accurate state
+      try {
+        await queryClient.invalidateQueries({
+          queryKey: spotifyQueryKeys.playlistProgress(state.playlistId),
+          refetchType: 'active',
+        });
+        await queryClient.invalidateQueries({
+          queryKey: spotifyQueryKeys.globalStats,
+          refetchType: 'active',
+        });
+        // Remove loading spinner immediately on error
+        await queryClient.invalidateQueries({
+          queryKey: spotifyQueryKeys.activeQueuePlaylistId,
+          refetchType: 'active',
+        });
+        console.log('[QueueBackgroundService] Cache invalidated after error recovery');
+      } catch (invalidationError) {
+        console.error('[QueueBackgroundService] Error invalidating queries after rollback:', invalidationError);
       }
     } catch (error) {
       console.error('[QueueBackgroundService] Error during rollback:', error);
     }
   }
 
-  // Show error notification
+  // ✅ STEP 3: Show error notification
   await showQueueErrorNotification(errorMessage);
 
-  // Clear state
+  // ✅ STEP 4: Clear state
   await clearQueueState();
+
+  console.log('[QueueBackgroundService] Error handling complete');
 }
 
 // ============================================================================
@@ -332,6 +412,14 @@ export async function startBackgroundQueue(params: {
   };
 }): Promise<boolean> {
   try {
+    // ✅ CRITICAL: Prevent multiple concurrent queues
+    const activeQueue = await isQueueActive();
+    if (activeQueue) {
+      console.warn('[QueueBackgroundService] Cannot start new queue - another queue is already active');
+      await showQueueErrorNotification('A queue is already in progress. Please wait for it to complete.');
+      return false;
+    }
+
     const { playlistId, playlistName, tracks, deviceId, firstTrackUri, stats } = params;
 
     // Skip the first track (already played)
@@ -383,10 +471,15 @@ export async function startBackgroundQueue(params: {
     // Show initial notification (foreground service notification)
     await showQueueStartNotification(playlistName, tracks.length);
 
-    // Start processing immediately (no need to wait for background trigger)
-    // We process in the current execution context
-    await processQueue(state);
+    // ✅ FIX: Start processing asynchronously to avoid blocking UI
+    // The queue will process in the background while UI remains responsive
+    // Error handling is done within processQueue -> handleTaskError
+    processQueue(state).catch(error => {
+      console.error('[QueueBackgroundService] Unhandled error in processQueue:', error);
+      handleTaskError(state, error instanceof Error ? error.message : 'Unknown error occurred');
+    });
 
+    // Return immediately so UI can update and show notification
     return true;
   } catch (error) {
     console.error('[QueueBackgroundService] Error starting background queue:', error);
@@ -437,9 +530,56 @@ export async function getQueueProgress(): Promise<{
 }
 
 /**
+ * Get the playlist ID of the currently active queue
+ * Returns null if no queue is active
+ *
+ * Use this to show loading states in UI for the playlist being queued
+ */
+export async function getActiveQueuePlaylistId(): Promise<string | null> {
+  const state = await loadQueueState();
+
+  if (!state || !state.isActive) {
+    return null;
+  }
+
+  return state.playlistId;
+}
+
+/**
  * Check if a queue is currently active
+ *
+ * Also performs cleanup of stale queue states (e.g. from app crashes).
+ * A queue is considered stale if it's been active for more than 45 minutes,
+ * which is longer than any realistic queue could take.
+ *
+ * Calculation:
+ * - Largest realistic playlist: ~10,000 tracks
+ * - Rate: 150ms per track
+ * - Max time: 10,000 × 0.15s = 1,500s ≈ 25 minutes
+ * - Safe timeout: 45 minutes (80% buffer)
  */
 export async function isQueueActive(): Promise<boolean> {
   const state = await loadQueueState();
-  return state?.isActive ?? false;
+
+  if (!state) return false;
+
+  // Check if queue state is stale (likely from app crash/force-close)
+  const STALE_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes
+  const isStale = state.isActive && (Date.now() - state.startedAt > STALE_TIMEOUT_MS);
+
+  if (isStale) {
+    console.warn(
+      `[QueueBackgroundService] Detected stale queue state (started ${Math.round((Date.now() - state.startedAt) / 60000)} minutes ago). Cleaning up...`
+    );
+
+    // Clear the stale state to allow new queues
+    await clearQueueState();
+
+    // Dismiss any lingering notification
+    await dismissNotification();
+
+    return false;
+  }
+
+  return state.isActive ?? false;
 }

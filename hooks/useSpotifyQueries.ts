@@ -7,7 +7,7 @@ import {
   showQueueErrorNotification,
   dismissNotification,
 } from '@/utils/notificationService';
-import { startBackgroundQueue } from '@/services/queueBackgroundService';
+import { startBackgroundQueue, getActiveQueuePlaylistId } from '@/services/queueBackgroundService';
 
 const spotifyService = SpotifyService;
 
@@ -19,6 +19,7 @@ export const spotifyQueryKeys = {
   savedTracks: ['spotify', 'saved-tracks'] as const,
   devices: ['spotify', 'devices'] as const,
   queueStatus: ['spotify', 'queue-status'] as const,
+  activeQueuePlaylistId: ['spotify', 'active-queue-playlist-id'] as const,
   playlistProgress: (playlistId: string) => ['spotify', 'playlist', playlistId, 'progress'] as const,
   globalStats: ['spotify', 'global-stats'] as const,
 };
@@ -227,25 +228,49 @@ export function useQueueShuffleMutation() {
       return success;
     },
     onSuccess: async (success, variables) => {
+      // Query invalidation strategy:
+      //
+      // 1. activeQueuePlaylistId: ALWAYS invalidate immediately
+      //    - Shows loading spinner right away (no 0-2s polling delay)
+      //
+      // 2. playlistProgress: ALWAYS invalidate immediately
+      //    - Cycle completion: AsyncStorage WAS updated during getSmartShuffledTracks()
+      //      (cycle reset happens in smartShuffle.ts:378-382), so fresh data is available
+      //    - Mid-cycle queueing: AsyncStorage was NOT updated yet, but refetching is harmless
+      //      (same cached data returns, no visual change until handleTaskComplete runs)
+      //
+      // 3. globalStats: NOT invalidated here
+      //    - Only invalidated in handleTaskComplete after tracks are marked as played
+      //
+      // This ensures immediate UI feedback when clicking completed playlists (golden ring removal)
+
       if (success) {
-        // Invalidate progress and stats queries to reflect updated state
-        // This ensures UI updates after tracks are marked as played
+        const { playlist } = variables;
+        console.log('[QueueShuffle] ✅ Queue started successfully');
+
+        // Invalidate active queue query to show loading spinner immediately
         await queryClient.invalidateQueries({
-          queryKey: spotifyQueryKeys.playlistProgress(variables.playlist.id),
+          queryKey: spotifyQueryKeys.activeQueuePlaylistId,
+          refetchType: 'active',
         });
+
+        // Invalidate progress query to refresh cycle reset state immediately
         await queryClient.invalidateQueries({
-          queryKey: spotifyQueryKeys.globalStats,
+          queryKey: spotifyQueryKeys.playlistProgress(playlist.id),
+          refetchType: 'active',
         });
+
+        console.log('[QueueShuffle] ✅ Visual feedback triggered - UI will update now');
       }
     },
     onError: (error) => {
       if (error instanceof CancelledError) {
-        console.log('Shuffle was cancelled by React Query.');
+        console.log('[QueueShuffle] Shuffle was cancelled by React Query');
         dismissNotification();
         return;
       }
 
-      console.error('Queue shuffle failed:', error);
+      console.error('[QueueShuffle] Queue shuffle failed:', error);
       showQueueErrorNotification(error instanceof Error ? error.message : 'An error occurred');
     },
   });
@@ -283,5 +308,21 @@ export function useGlobalStats(enabled: boolean = true, enablePolling: boolean =
     refetchOnWindowFocus: true, // Refetch when user returns to app
     refetchInterval: enablePolling ? 3 * 1000 : false, // Optional polling for real-time updates
     retry: 0, // Don't retry on error (stats are not critical)
+  });
+}
+
+// Active queue playlist ID query - polls to show loading state on the right playlist
+export function useActiveQueuePlaylistId() {
+  return useQuery({
+    queryKey: spotifyQueryKeys.activeQueuePlaylistId,
+    queryFn: async (): Promise<string | null> => {
+      return await getActiveQueuePlaylistId();
+    },
+    staleTime: 1 * 1000, // 1 second - needs to be fresh for UI responsiveness
+    gcTime: 5 * 1000, // 5 seconds - short cache since this changes frequently
+    refetchInterval: 2 * 1000, // Poll every 2 seconds to update UI
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    retry: 0, // Don't retry - this is just for UI feedback
   });
 }
