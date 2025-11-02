@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSpotify } from '@/contexts/SpotifyContext';
 import { useQueueShuffleMutation, useSpotifyDevices, usePlaylistProgress, useActiveQueuePlaylistId } from '@/hooks/useSpotifyQueries';
 import { Music, Play, AlertCircle } from 'lucide-react-native';
@@ -11,6 +12,21 @@ import { initializeNotifications } from '@/utils/notificationService';
 import { addRecentPlaylist } from '@/utils/recentPlaylists';
 import { isQueueActive } from '@/services/queueBackgroundService';
 import type { SpotifyPlaylist } from '@/types/spotify';
+
+// Helper function to get time-based greeting
+function getTimeBasedGreeting(): string {
+  const hour = new Date().getHours();
+
+  if (hour >= 5 && hour < 12) {
+    return 'Good morning';
+  } else if (hour >= 12 && hour < 17) {
+    return 'Good afternoon';
+  } else if (hour >= 17 && hour < 22) {
+    return 'Good evening';
+  } else {
+    return 'Good night';
+  }
+}
 
 // Animated Playlist Card Component
 function AnimatedPlaylistCard({
@@ -321,9 +337,15 @@ export default function HomeTab() {
   return (
     <View style={styles.container}>
       <ScrollView style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.welcomeText}>Welcome back, {user?.display_name}!</Text>
-          <Text style={styles.headerSubtext}>Choose a playlist to shuffle</Text>
+        <View style={styles.headerContainer}>
+          <LinearGradient
+            colors={['#1a1a1a', '#0d0d0d', '#000000']}
+            locations={[0, 0.5, 1]}
+            style={styles.gradientHeader}
+          >
+            <Text style={styles.greetingText}>{getTimeBasedGreeting()}, {user?.display_name}</Text>
+            <Text style={styles.headerSubtext}>Choose a playlist to shuffle</Text>
+          </LinearGradient>
         </View>
 
         {/* Re-authentication banner */}
@@ -401,19 +423,40 @@ const styles = StyleSheet.create({
     padding: 20,
     backgroundColor: '#000',
   },
-  header: {
+  headerContainer: {
+    overflow: 'hidden',
+  },
+  gradientHeader: {
     padding: 20,
     paddingTop: 60,
+    paddingBottom: 28,
   },
-  welcomeText: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
+  greetingText: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#ffffff',
+    letterSpacing: -0.5,
+    lineHeight: 38,
+    marginBottom: 12,
   },
   headerSubtext: {
     fontSize: 16,
-    color: '#b3b3b3',
+    fontWeight: '400',
+    color: '#a0a0a0',
+    letterSpacing: 0.3,
+    lineHeight: 24,
+  },
+  welcomeText: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#ffffff',
+    letterSpacing: -0.5,
+    lineHeight: 34,
+    marginBottom: 12,
+  },
+  header: {
+    padding: 20,
+    paddingTop: 60,
   },
   title: {
     fontSize: 32,
